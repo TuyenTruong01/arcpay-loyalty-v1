@@ -2,6 +2,11 @@ import { CheckCircle2, ExternalLink, QrCode, RefreshCw, Wallet } from 'lucide-re
 import { useEffect, useMemo, useState } from 'react';
 import { supabase, hasSupabaseConfig } from '../lib/supabaseClient.js';
 import { confirmArcPayment } from '../services/posService.js';
+import {
+  recordPaymentProofOnArc,
+  arcRegistryTxUrl,
+  arcRegistryContractUrl,
+} from '../services/paymentRegistry.js';
 import { connectArcWallet, sendArcUsdcTransfer, waitForArcReceipt } from '../services/arcWallet.js';
 import { ARC_TESTNET, arcScanTxUrl } from '../utils/arcConfig.js';
 import { money, pointsFromRaw, rawFromPoints, shortAddress } from '../utils/format.js';
@@ -17,10 +22,6 @@ function getCheckoutToken() {
   const checkoutIndex = parts.findIndex(part => part === 'checkout');
 
   return checkoutIndex >= 0 ? parts[checkoutIndex + 1] : '';
-}
-
-function normalizeWallet(wallet = '') {
-  return String(wallet || '').trim().toLowerCase();
 }
 
 function getOrderStoreId(order = {}, store = {}) {
@@ -151,12 +152,16 @@ export default function CustomerCheckoutPage({
   const [usePoints, setUsePoints] = useState(false);
   const [status, setStatus] = useState('ready');
   const [txHash, setTxHash] = useState('');
+  const [proofTxHash, setProofTxHash] = useState('');
+  const [proofStatus, setProofStatus] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
 
   useEffect(() => {
     async function loadCheckout() {
       setLoading(true);
       setErrorMessage('');
+      setProofStatus('');
+      setProofTxHash('');
 
       try {
         if (hasSupabaseConfig && supabase && token) {
@@ -178,18 +183,6 @@ export default function CustomerCheckoutPage({
               storeId: data.store_id,
             });
 
-            /**
-             * Important:
-             * Do NOT load loyalty points from the invoice customer here.
-             * Loyalty points must follow the wallet that connects on this checkout page.
-             *
-             * Flow:
-             * 1. POS creates invoice as Guest or selected customer.
-             * 2. Customer opens checkout.
-             * 3. Customer connects wallet.
-             * 4. App finds/creates customer by wallet_address.
-             * 5. Points are loaded from that wallet customer only.
-             */
             setCustomerWallet('');
             setWalletConnected(false);
             setWalletCustomer(null);
@@ -314,7 +307,13 @@ export default function CustomerCheckoutPage({
     if (!order) return;
 
     setErrorMessage('');
+    setProofStatus('');
+    setProofTxHash('');
     setStatus('paying');
+
+    let submittedHash = '';
+    let receipt = null;
+    let proof = null;
 
     try {
       const wallet = walletConnected && customerWallet
@@ -339,7 +338,7 @@ export default function CustomerCheckoutPage({
         }
       }
 
-      const submittedHash = await sendArcUsdcTransfer({
+      submittedHash = await sendArcUsdcTransfer({
         from: walletAddress,
         to: receiverWallet,
         rawAmount: payable,
@@ -348,10 +347,48 @@ export default function CustomerCheckoutPage({
       setTxHash(submittedHash);
       setStatus('confirming');
 
-      const receipt = await waitForArcReceipt(submittedHash);
+      receipt = await waitForArcReceipt(submittedHash);
 
       if (String(receipt?.status || '').toLowerCase() === '0x0') {
         throw new Error('Arc transaction reverted. The invoice was not marked as paid.');
+      }
+
+      try {
+        setProofStatus('Recording payment proof on ArcPayPaymentRegistry...');
+
+        proof = await recordPaymentProofOnArc({
+          invoiceCode: order.code,
+          checkoutToken: token || order.checkoutToken,
+          payer: walletAddress,
+          merchant: receiverWallet,
+          amount: payable,
+          paymentTxHash: submittedHash,
+          metadata: {
+            order_id: order.id,
+            currency: 'USDC',
+            subtotal_raw: subtotal,
+            tax_raw: taxAmount,
+            total_before_points_raw: totalBeforePoints,
+            redeemed_points: redeemPoints,
+            redeemed_value_raw: redeemedValue,
+            earned_points: earnedPoints,
+          },
+        });
+
+        if (proof?.proofTxHash) {
+          setProofTxHash(proof.proofTxHash);
+        }
+
+        setProofStatus(
+          proof?.alreadyRecorded
+            ? 'Payment proof already exists on ArcPayPaymentRegistry.'
+            : 'Payment proof recorded on ArcPayPaymentRegistry.'
+        );
+      } catch (proofError) {
+        console.error(proofError);
+        setProofStatus(
+          `USDC payment succeeded, but payment proof was not recorded: ${proofError.message || proofError}`
+        );
       }
 
       if (hasSupabaseConfig && supabase && order.id && !String(order.id).startsWith('demo')) {
@@ -372,6 +409,16 @@ export default function CustomerCheckoutPage({
             tx_hash: submittedHash,
             wallet_customer_id: customer?.id || null,
             wallet_address: walletAddress,
+
+            proof_contract: proof?.contractAddress || '',
+            proof_tx_hash: proof?.proofTxHash || '',
+            proof_already_recorded: Boolean(proof?.alreadyRecorded),
+            invoice_hash: proof?.invoiceHash || '',
+            checkout_token_hash: proof?.checkoutTokenHash || '',
+            proof_status: proof
+              ? 'recorded_or_exists'
+              : 'payment_success_proof_not_recorded',
+
             receipt,
           },
         });
@@ -526,7 +573,7 @@ export default function CustomerCheckoutPage({
               {status === 'paid'
                 ? 'Payment Confirmed'
                 : status === 'confirming'
-                  ? 'Waiting for Arc finality...'
+                  ? 'Waiting for Arc finality / proof...'
                   : 'Pay with Arc USDC'}
             </button>
           </>
@@ -541,14 +588,37 @@ export default function CustomerCheckoutPage({
             target="_blank"
             rel="noreferrer"
           >
-            View transaction on ArcScan <ExternalLink size={14} />
+            View USDC payment transaction on ArcScan <ExternalLink size={14} />
           </a>
         )}
+
+        {proofStatus && <p className="helper-text">{proofStatus}</p>}
+
+        {proofTxHash && (
+          <a
+            className="explorer-link"
+            href={arcRegistryTxUrl(proofTxHash)}
+            target="_blank"
+            rel="noreferrer"
+          >
+            View payment proof transaction on ArcScan <ExternalLink size={14} />
+          </a>
+        )}
+
+        <a
+          className="explorer-link"
+          href={arcRegistryContractUrl()}
+          target="_blank"
+          rel="noreferrer"
+        >
+          View ArcPayPaymentRegistry contract <ExternalLink size={14} />
+        </a>
 
         <div className="payment-info public-payment-info">
           <p><span>Receiver</span><strong>{shortAddress(receiverWallet)}</strong></p>
           <p><span>Network</span><strong>{ARC_TESTNET.chainName}</strong></p>
           <p><span>USDC Contract</span><strong>{shortAddress('0x3600000000000000000000000000000000000000')}</strong></p>
+          <p><span>Registry Contract</span><strong>{shortAddress('0x7B9941Da31b2194Efc2881af3B35987EeF137AA6')}</strong></p>
           <p><span>Checkout token</span><strong>{token || order.checkoutToken || '-'}</strong></p>
         </div>
       </section>
