@@ -31,6 +31,9 @@ export default function POSPanel({
 }) {
   const checkoutToken = checkout?.checkout_token || checkout?.checkoutToken || '';
   const checkoutLink = checkoutToken ? `${window.location.origin}/checkout/${checkoutToken}` : '';
+  const qrImageUrl = checkoutLink
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(checkoutLink)}`
+    : '';
 
   async function copyCheckoutLink() {
     if (!checkoutLink) return;
@@ -41,6 +44,12 @@ export default function POSPanel({
       prompt('Copy checkout link:', checkoutLink);
     }
   }
+
+  function openCheckoutPage() {
+    if (!checkoutLink) return;
+    window.open(checkoutLink, '_blank', 'noopener,noreferrer');
+  }
+
   const canUsePoints = selectedCustomer?.id && Number(selectedCustomer.points || 0) > 0;
   const maxDiscountRaw = Math.floor(grossTotal * 0.2);
   const pointsCap = Math.min(Number(selectedCustomer?.points || 0), Math.floor(maxDiscountRaw / 100));
@@ -174,18 +183,54 @@ export default function POSPanel({
             {checkout && (
               <div className="qr-card">
                 <h3>Checkout QR</h3>
-                <div className="qr-box"><span>A</span></div>
+
+                <div
+                  className="qr-real-box"
+                  style={{
+                    width: 260,
+                    height: 260,
+                    margin: '12px auto',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: '#ffffff',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: 18,
+                    padding: 10,
+                  }}
+                >
+                  {qrImageUrl ? (
+                    <img
+                      src={qrImageUrl}
+                      alt="ArcPay checkout QR"
+                      style={{
+                        width: 240,
+                        height: 240,
+                        display: 'block',
+                      }}
+                    />
+                  ) : (
+                    <div className="qr-box"><span>A</span></div>
+                  )}
+                </div>
+
                 <p>Invoice <strong>{checkout.order_code}</strong></p>
                 <small>Token: {checkoutToken}</small>
                 <small>Checkout page: {checkoutLink}</small>
+
                 <div className="payment-info">
                   <p><span>Network</span><strong>Arc Testnet</strong></p>
                   <p><span>Receiver</span><strong>{shortAddress(receiverWallet)}</strong></p>
                   <p><span>Payable</span><strong>{money(total)}</strong></p>
                 </div>
+
                 <div className="qr-actions">
-                  <button type="button" className="ghost full" onClick={copyCheckoutLink}><Copy size={15} /> Copy checkout link</button>
-                  <button type="button" className="ghost full" onClick={() => window.open(checkoutLink, '_blank')}><ExternalLink size={15} /> Open customer page</button>
+                  <button type="button" className="ghost full" onClick={copyCheckoutLink}>
+                    <Copy size={15} /> Copy checkout link
+                  </button>
+                  <button type="button" className="ghost full" onClick={openCheckoutPage}>
+                    <ExternalLink size={15} /> Open customer page
+                  </button>
                 </div>
               </div>
             )}
