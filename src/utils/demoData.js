@@ -1,11 +1,12 @@
 import { DEFAULT_STAFF_WALLETS } from './roles.js';
-import { MERCHANT_RECEIVER_WALLET } from './arcConfig.js';
+
+const DEMO_RECEIVER_WALLET = '0x10832dbAc54F6EBD6133356e5277868aA36d32fb';
 
 export const demoState = {
   store: {
     name: 'Minh Chau Grocery',
     branch: 'Da Nang Branch',
-    network: 'Arc Testnet',
+    network: 'Store payment network',
   },
   settings: {
     taxRate: 10,
@@ -13,7 +14,7 @@ export const demoState = {
     redeemRate: '100 points = 1 USDC discount',
     maxRedeem: 'Max 20% of invoice total',
   },
-  receiverWallet: MERCHANT_RECEIVER_WALLET,
+  receiverWallet: DEMO_RECEIVER_WALLET,
   staff: DEFAULT_STAFF_WALLETS[0],
   staffMembers: DEFAULT_STAFF_WALLETS,
   categories: ['All', 'Drinks', 'Food', 'Condiments', 'Household', 'Snacks', 'Other'],
@@ -26,7 +27,7 @@ export const demoState = {
     { id: 'P006', name: 'P/S Toothpaste', sku: 'PS-180G', barcode: '893000001006', category: 'Household', unit: 'tube', price: 18000, costPrice: 14000, stock: 35, min: 20, emoji: '🪥', description: 'Toothpaste tube', active: true },
   ],
   customers: [
-    { id: 'C001', name: 'Arc Wallet Customer', wallet: '0xf3a00000000000000000000000000000009b2c1d', points: 394, totalSpent: 409000, createdAt: new Date().toISOString() },
+    { id: 'C001', name: 'Wallet Customer', wallet: '0xf3a00000000000000000000000000000009b2c1d', points: 394, totalSpent: 409000, createdAt: new Date().toISOString() },
     { id: 'C002', name: 'Guest Wallet', wallet: '0x7b2e1af93c000000000000000000000000abc123', points: 128, totalSpent: 128000, createdAt: new Date().toISOString() },
   ],
   orders: [],

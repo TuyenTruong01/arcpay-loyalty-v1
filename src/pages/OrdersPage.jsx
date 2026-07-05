@@ -23,12 +23,12 @@ function buildReceiptHtml(order, taxRate) {
     <html><head><title>${order.code}</title><style>
       body{font-family:Arial,sans-serif;padding:24px;color:#111827} h1{margin:0 0 6px} table{width:100%;border-collapse:collapse;margin-top:18px} th,td{border-bottom:1px solid #e5e7eb;padding:8px;text-align:left} .right{text-align:right}.muted{color:#64748b}.total{font-size:18px;font-weight:800}.box{border:1px solid #e5e7eb;border-radius:12px;padding:14px;margin-top:16px}
     </style></head><body>
-      <h1>ArcPay Loyalty Receipt</h1>
+      <h1>Paynet APoint Receipt</h1>
       <div class="muted">Invoice ${order.code}</div>
       <div class="box">
         <div><b>Status:</b> ${order.paymentStatus}</div>
         <div><b>Customer wallet:</b> ${order.customerWallet || '-'}</div>
-        <div><b>Network:</b> ${order.network || 'arc-testnet'}</div>
+        <div><b>Network:</b> ${order.network || 'Store payment network'}</div>
         <div><b>Tx hash:</b> ${order.txHash || '-'}</div>
         <div><b>Paid at:</b> ${formatTime(order.paidAt || order.createdAt)}</div>
       </div>
@@ -146,7 +146,7 @@ export default function OrdersPage({ orders, taxRate = 10 }) {
               <td>{order.code}</td>
               <td>{shortAddress(order.customerWallet || order.customer)}</td>
               <td>{money(order.total)}</td>
-              <td>Arc USDC</td>
+              <td>USDC</td>
               <td><span className={`badge ${order.paymentStatus === 'paid' ? 'ok' : 'warn'}`}>{order.paymentStatus}</span></td>
               <td>{formatTime(order.createdAt)}</td>
               <td className="action-cell">
@@ -170,7 +170,7 @@ export default function OrdersPage({ orders, taxRate = 10 }) {
             <div className="receipt-meta">
               <p><span>Customer Wallet</span><strong>{shortAddress(selectedOrder.customerWallet)}</strong></p>
               <p><span>Created</span><strong>{formatDate(selectedOrder.createdAt)}</strong></p>
-              <p><span>Network</span><strong>{selectedOrder.network || 'arc-testnet'}</strong></p>
+              <p><span>Network</span><strong>{selectedOrder.network || 'Store payment network'}</strong></p>
               <p><span>Tx Hash</span><strong>{shortAddress(selectedOrder.txHash)}</strong></p>
             </div>
             <table className="data-table">

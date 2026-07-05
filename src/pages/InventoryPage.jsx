@@ -1,7 +1,19 @@
 import { Plus } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import { money } from '../utils/format.js';
 
-export default function InventoryPage({ inventory, products, setEditingProduct, canManage = false }) {
+export default function InventoryPage({
+  inventory,
+  products,
+  warehouses = [],
+  canManage = false,
+  onAddInventoryProduct,
+  onUpdateInventoryWarehouse,
+}) {
+  const [showForm, setShowForm] = useState(false);
+  const [draft, setDraft] = useState({ productId: '', warehouseId: '', quantity: 0, min: 0 });
+
+  const activeWarehouses = warehouses.filter(warehouse => (warehouse.status || (warehouse.active === false ? 'inactive' : 'active')) === 'active');
   const rows = inventory?.length ? inventory : products.map(product => ({
     id: product.id,
     productId: product.id,
@@ -11,17 +23,56 @@ export default function InventoryPage({ inventory, products, setEditingProduct, 
     sellPrice: product.price,
     quantity: product.stock,
     min: product.min,
-    warehouse: 'Main Store',
+    warehouse: product.warehouse || activeWarehouses[0]?.name || 'Main Store',
+    warehouseId: product.warehouseId || activeWarehouses[0]?.id || '',
     active: product.active,
+    status: product.status || (product.active === false ? 'inactive' : 'active'),
     emoji: product.emoji,
   }));
+
+  const addableProducts = useMemo(
+    () => products.filter(product => !rows.some(row => row.productId === product.id && row.warehouseId === draft.warehouseId)),
+    [products, rows, draft.warehouseId]
+  );
+
+  function submit(event) {
+    event.preventDefault();
+    if (!draft.productId) return alert('Choose a product from Products first.');
+    if (!draft.warehouseId) return alert('Choose a warehouse.');
+    onAddInventoryProduct?.(draft);
+    setDraft({ productId: '', warehouseId: '', quantity: 0, min: 0 });
+    setShowForm(false);
+  }
 
   return (
     <section className="panel full-page-panel">
       <div className="panel-head">
         <div><p className="eyebrow">Stock Control</p><h2>Inventory</h2></div>
-        {canManage && <button type="button" onClick={() => setEditingProduct('new')}><Plus size={16} /> Add Product</button>}
+        {canManage && <button type="button" onClick={() => setShowForm(current => !current)}><Plus size={16} /> Add Inventory Item</button>}
       </div>
+
+      {showForm && (
+        <form className="inline-edit-form" onSubmit={submit}>
+          <label>
+            Product
+            <select value={draft.productId} onChange={event => setDraft({ ...draft, productId: event.target.value })}>
+              <option value="">Choose product</option>
+              {addableProducts.map(product => <option value={product.id} key={product.id}>{product.name}</option>)}
+            </select>
+          </label>
+          <label>
+            Warehouse
+            <select value={draft.warehouseId} onChange={event => setDraft({ ...draft, warehouseId: event.target.value })}>
+              <option value="">Choose warehouse</option>
+              {activeWarehouses.map(warehouse => <option value={warehouse.id} key={warehouse.id}>{warehouse.name}</option>)}
+            </select>
+          </label>
+          <label>Current Stock<input type="number" value={draft.quantity} onChange={event => setDraft({ ...draft, quantity: Number(event.target.value) })} /></label>
+          <label>Minimum Stock<input type="number" value={draft.min} onChange={event => setDraft({ ...draft, min: Number(event.target.value) })} /></label>
+          <button className="primary" type="submit">Save Inventory</button>
+        </form>
+      )}
+
       <table className="data-table">
         <thead>
           <tr>
@@ -46,7 +97,17 @@ export default function InventoryPage({ inventory, products, setEditingProduct, 
               <td>{money(item.sellPrice)}</td>
               <td>{item.quantity}</td>
               <td>{item.min}</td>
-              <td>{item.warehouse}</td>
+              <td>
+                {canManage ? (
+                  <select
+                    className="table-select"
+                    value={item.warehouseId || ''}
+                    onChange={event => onUpdateInventoryWarehouse?.(item.productId, event.target.value)}
+                  >
+                    {activeWarehouses.map(warehouse => <option value={warehouse.id} key={warehouse.id}>{warehouse.name}</option>)}
+                  </select>
+                ) : item.warehouse}
+              </td>
               <td><span className={`badge ${Number(item.quantity) <= Number(item.min) ? 'warn' : 'ok'}`}>{Number(item.quantity) <= Number(item.min) ? 'Reorder' : 'OK'}</span></td>
             </tr>
           ))}

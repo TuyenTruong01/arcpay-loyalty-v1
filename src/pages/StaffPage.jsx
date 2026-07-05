@@ -1,7 +1,7 @@
 import { Plus, Save, ShieldCheck, Trash2, UserCog } from 'lucide-react';
 import { useState } from 'react';
 import { shortAddress } from '../utils/format.js';
-import { MANAGER_WALLET, rolePermissionLabel } from '../utils/roles.js';
+import { rolePermissionLabel } from '../utils/roles.js';
 
 const emptyStaff = {
   name: '',
@@ -53,8 +53,8 @@ export default function StaffPage({ staffMembers = [], isManager, onSaveStaff, o
         <div className="staff-notice">
           <UserCog size={22} />
           <div>
-            <strong>Manager wallet</strong>
-            <span>{MANAGER_WALLET}</span>
+            <strong>Store access wallets</strong>
+            <span>Owner wallets receive payments. Staff wallets can create invoices.</span>
           </div>
         </div>
 
@@ -73,7 +73,8 @@ export default function StaffPage({ staffMembers = [], isManager, onSaveStaff, o
           <tbody>
             {staffMembers.map((member, index) => {
               const isCurrent = String(member.wallet).toLowerCase() === String(currentWallet).toLowerCase();
-              const isManagerRow = String(member.wallet).toLowerCase() === MANAGER_WALLET.toLowerCase() || String(member.role).toLowerCase() === 'manager';
+              const roleKey = String(member.roleKey || member.role || '').toLowerCase();
+              const isManagerRow = ['owner', 'store_owner', 'manager', 'system_admin'].includes(roleKey);
               return (
                 <tr key={member.id || member.wallet}>
                   <td>{index + 1}</td>

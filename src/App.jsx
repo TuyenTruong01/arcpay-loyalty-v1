@@ -3,102 +3,126 @@ import Header from './components/Header.jsx';
 import ProductModal from './components/ProductModal.jsx';
 import Sidebar from './components/Sidebar.jsx';
 import StatusBanner from './components/StatusBanner.jsx';
-import DashboardPage from './pages/DashboardPage.jsx';
-import POSPage from './pages/POSPage.jsx';
-import OrdersPage from './pages/OrdersPage.jsx';
+import BestSellersPage from './pages/BestSellersPage.jsx';
+import CustomerCheckoutPage from './pages/CustomerCheckoutPage.jsx';
 import CustomersPage from './pages/CustomersPage.jsx';
-import ProductsPage from './pages/ProductsPage.jsx';
+import DashboardPage from './pages/DashboardPage.jsx';
 import InventoryPage from './pages/InventoryPage.jsx';
+import OrdersPage from './pages/OrdersPage.jsx';
+import POSPage from './pages/POSPage.jsx';
 import PointsHistoryPage from './pages/PointsHistoryPage.jsx';
-import RewardsPage from './pages/RewardsPage.jsx';
-import WarehousePage from './pages/WarehousePage.jsx';
+import ProductsPage from './pages/ProductsPage.jsx';
 import PurchaseOrdersPage from './pages/PurchaseOrdersPage.jsx';
 import RevenuePage from './pages/RevenuePage.jsx';
-import BestSellersPage from './pages/BestSellersPage.jsx';
+import RewardsPage from './pages/RewardsPage.jsx';
 import SettingsPage from './pages/SettingsPage.jsx';
 import StaffPage from './pages/StaffPage.jsx';
-import CustomerCheckoutPage from './pages/CustomerCheckoutPage.jsx';
-import { supabase, hasSupabaseConfig } from './lib/supabaseClient.js';
-import { createPosOrder, confirmArcPayment } from './services/posService.js';
-import { demoState } from './utils/demoData.js';
-import { DEFAULT_STAFF_WALLETS, MANAGER_WALLET, isManagerWallet, normalizeWallet } from './utils/roles.js';
-import { mapCustomer, mapInventory, mapOrder, mapProduct, mapPurchaseOrder, mapStaff, mapStore, mapWarehouse } from './utils/mappers.js';
+import SystemAdminPage from './pages/SystemAdminPage.jsx';
+import WarehousePage from './pages/WarehousePage.jsx';
+import { connectEvmWallet } from './services/evmWallet.js';
+import { getPaymentChain } from './chains/index.js';
+import {
+  addWarehouseRecord,
+  createCheckoutOrder,
+  createStoreRecord,
+  disableStaffRecord,
+  loadPaynetNetwork,
+  saveProductRecord,
+  saveStaffRecord,
+  updateProductStatusRecord,
+  updateStoreOwnerRecord,
+  updateStoreRecord,
+  updateStoreStatusRecord,
+  updateWarehouseStatusRecord,
+} from './services/paynetService.js';
+import { hasSupabaseConfig } from './lib/supabaseClient.js';
 import { pointsFromRaw, rawFromPoints } from './utils/format.js';
-import { MERCHANT_RECEIVER_WALLET } from './utils/arcConfig.js';
-import { connectArcWallet } from './services/arcWallet.js';
+import {
+  applyRoleAccessToStores,
+  buildStoreState,
+  initialNetworkStores,
+  normalizeWallet,
+  roleAccessConfig,
+  resolveNetworkRole,
+} from './utils/storeNetwork.js';
 
-const DEFAULT_STORE_ID = 'e9db5f1e-f9f9-4569-ad73-879f6dc90138';
-
-function isUuid(value = '') {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || '').trim());
+function firstActiveStore(stores = []) {
+  return stores.find(store => store.status !== 'disabled') || stores[0] || null;
 }
 
-function firstNonEmpty(...values) {
-  return values.find(value => value !== undefined && value !== null && String(value).trim() !== '') || null;
+function titleCaseRole(role = 'cashier') {
+  return role === 'owner' ? 'Owner' : role.charAt(0).toUpperCase() + role.slice(1);
 }
 
-
-
-function isValidEvmAddress(value = '') {
-  return /^0x[a-fA-F0-9]{40}$/.test(String(value || '').trim());
+function isStoreOwnerRole(roleKey = '') {
+  return ['store_owner', 'owner'].includes(roleKey);
 }
 
-function resolveReceiverWallet(value = '') {
-  const text = String(value || '').trim();
-  const demoReceiver = '0x1234abcd5678ef901234abcd5678ef901234abcd';
-  if (isValidEvmAddress(text) && normalizeWallet(text) !== normalizeWallet(demoReceiver)) {
-    return text;
+function connectChainCode(store = {}) {
+  const code = String(store?.networkCode || '').toLowerCase();
+  if (code.includes('avalanche') || code.includes('fuji') || code.includes('avax')) return 'avalanche';
+  return code || 'avalanche';
+}
+
+function ensureStoreProducts(store) {
+  return Array.isArray(store?.products) ? store.products : [];
+}
+
+function slugifyStoreName(name = '') {
+  return String(name || 'new-store')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'new-store';
+}
+
+const STAFF_ALLOWED_PAGES = ['pos', 'orders', 'customers', 'inventory'];
+const OWNER_ALLOWED_PAGES = [
+  'dashboard',
+  'pos',
+  'orders',
+  'customers',
+  'staff',
+  'products',
+  'inventory',
+  'points',
+  'rewards',
+  'warehouse',
+  'receiving',
+  'revenue',
+  'best-sellers',
+  'settings',
+];
+const SYSTEM_ADMIN_ALLOWED_PAGES = ['admin', ...OWNER_ALLOWED_PAGES];
+const CHECKOUT_STORAGE_KEY = 'paynet.pendingCheckouts';
+
+function readStoredCheckouts() {
+  try {
+    return JSON.parse(window.localStorage.getItem(CHECKOUT_STORAGE_KEY) || '[]');
+  } catch {
+    return [];
   }
-  return MERCHANT_RECEIVER_WALLET;
 }
 
-function ensureStaffArray(staffMembers) {
-  return Array.isArray(staffMembers) ? staffMembers : DEFAULT_STAFF_WALLETS;
-}
-
-function findStaffByWallet(staffMembers = [], wallet = '') {
-  const normalized = normalizeWallet(wallet);
-  const list = ensureStaffArray(staffMembers);
-
-  if (!normalized) return null;
-
-  return (
-    list.find(member => {
-      const memberWallet = normalizeWallet(member?.wallet);
-      const isActive = member?.active !== false;
-      return memberWallet === normalized && isActive;
-    }) || null
-  );
-}
-
-function mergeStaffWhitelist(rows = []) {
-  const byWallet = new Map();
-
-  DEFAULT_STAFF_WALLETS.forEach(member => {
-    const key = normalizeWallet(member.wallet);
-    if (key) byWallet.set(key, member);
-  });
-
-  ensureStaffArray(rows).forEach(member => {
-    const key = normalizeWallet(member?.wallet);
-    if (key) byWallet.set(key, { ...byWallet.get(key), ...member });
-  });
-
-  return Array.from(byWallet.values()).filter(member => member?.wallet && member?.active !== false);
+function saveStoredCheckout(order) {
+  const current = readStoredCheckouts().filter(item => item.checkoutToken !== order.checkoutToken);
+  window.localStorage.setItem(CHECKOUT_STORAGE_KEY, JSON.stringify([order, ...current].slice(0, 80)));
 }
 
 export default function App() {
-  const [page, setPage] = useState('pos');
+  const [page, setPage] = useState('admin');
   const [query, setQuery] = useState('');
-  const [data, setData] = useState(demoState);
-  const [ids, setIds] = useState({ storeId: null, staffId: null });
-  const [dbMessage, setDbMessage] = useState('Loading Supabase...');
+  const [stores, setStores] = useState(() => applyRoleAccessToStores(initialNetworkStores));
+  const [networkCustomers, setNetworkCustomers] = useState([]);
+  const [networkPointsHistory, setNetworkPointsHistory] = useState([]);
+  const [selectedStoreId, setSelectedStoreId] = useState(initialNetworkStores[0]?.id || '');
   const [connected, setConnected] = useState(false);
   const [currentWallet, setCurrentWallet] = useState('');
+  const [dbMessage, setDbMessage] = useState('Frontend multi-store mode. Supabase schema can be connected after the UI is approved.');
 
   const [invoiceActive, setInvoiceActive] = useState(false);
   const [cart, setCart] = useState([]);
-  const [customerId, setCustomerId] = useState('');
+  const [customerId, setCustomerId] = useState('C001');
   const [activeCategory, setActiveCategory] = useState('All');
   const [productSearch, setProductSearch] = useState('');
   const [pointsUsed, setPointsUsed] = useState(0);
@@ -106,161 +130,116 @@ export default function App() {
   const [paymentStatus, setPaymentStatus] = useState('idle');
   const [editingProduct, setEditingProduct] = useState(null);
 
-  async function loadData() {
-    if (!hasSupabaseConfig || !supabase) {
-      setData({ ...demoState, staff: findStaffByWallet(demoState.staffMembers || DEFAULT_STAFF_WALLETS, currentWallet) || DEFAULT_STAFF_WALLETS[0] });
-      setIds({ storeId: DEFAULT_STORE_ID, staffId: null });
-      setCustomerId(demoState.customers[0]?.id || '');
+  async function reloadNetwork() {
+    if (!hasSupabaseConfig) {
       setDbMessage('Supabase is not configured. Using local demo data.');
       return;
     }
 
-    setDbMessage('Reading live Supabase data...');
-
-    const safeRows = (result, fallback = []) => {
-      if (result?.error) {
-        console.warn('Supabase optional query error:', result.error.message || result.error);
-        return fallback;
-      }
-      return Array.isArray(result?.data) ? result.data : fallback;
-    };
-
-    const safeSingle = (result, fallback = null) => {
-      if (result?.error) {
-        console.warn('Supabase optional query error:', result.error.message || result.error);
-        return fallback;
-      }
-      return result?.data || fallback;
-    };
-
     try {
-      // Keep these three queries simple. If a relation join or optional filter fails,
-      // the whole app should not fall back to demo data.
-      const [storeListRes, productRes, settingsListRes] = await Promise.all([
-        supabase.from('stores').select('*').limit(5),
-        supabase.from('products').select('*').order('name', { ascending: true }),
-        supabase.from('store_settings').select('*').limit(5),
-      ]);
-
-      const storeRows = safeRows(storeListRes, []);
-      const allProductRows = safeRows(productRes, []);
-      const settingsRows = safeRows(settingsListRes, []);
-
-      const storeRow = storeRows.find(row => row.id === DEFAULT_STORE_ID) || storeRows.find(row => row.is_active !== false) || storeRows[0] || null;
-      const settingsRow = settingsRows.find(row => row.store_id === (storeRow?.id || DEFAULT_STORE_ID)) || settingsRows.find(row => row.is_active !== false) || settingsRows[0] || {};
-      const resolvedStoreId = firstNonEmpty(
-        storeRow?.id,
-        settingsRow?.store_id,
-        allProductRows.find(row => row.store_id)?.store_id,
-        DEFAULT_STORE_ID
-      );
-
-      const productRows = allProductRows
-        .filter(row => row.is_active !== false)
-        .filter(row => !resolvedStoreId || !row.store_id || row.store_id === resolvedStoreId);
-
-      const [categoryRes, customerRes, staffRes, orderRes, pointsRes, inventoryRes, warehouseRes, purchaseRes] = await Promise.all([
-        supabase.from('categories').select('*').order('sort_order', { ascending: true }),
-        supabase.from('customers').select('*').order('total_spent', { ascending: false }),
-        supabase.from('staff').select('*').order('created_at', { ascending: true }),
-        supabase.from('orders').select('*, customers(full_name, wallet_address), order_items(*, products(name, sku, barcode)), payments(*)').order('created_at', { ascending: false }).limit(80),
-        supabase.from('loyalty_transactions').select('*, customers(wallet_address)').order('created_at', { ascending: false }).limit(80),
-        supabase.from('inventory').select('*, products(name, sku, barcode, cost_price, sell_price, min_stock, stock_quantity, is_active), warehouses(name)').order('updated_at', { ascending: false }),
-        supabase.from('warehouses').select('*').order('created_at', { ascending: true }),
-        supabase.from('purchase_orders').select('*, suppliers(name), purchase_order_items(*, products(name, sku))').order('created_at', { ascending: false }).limit(30),
-      ]);
-
-      const categoryRows = safeRows(categoryRes, []).filter(row => row.is_active !== false);
-      const categoryMap = Object.fromEntries(categoryRows.map(row => [row.id, row.name]));
-      const categories = ['All', ...categoryRows.map(row => mapProduct({ id: 'x', name: 'x', sell_price: 0, stock_quantity: 0, min_stock: 0, category_id: row.id }, categoryMap).category)].filter((item, index, arr) => arr.indexOf(item) === index);
-      const products = productRows.map(row => mapProduct(row, categoryMap));
-      const customers = safeRows(customerRes, []).map(mapCustomer);
-      const staffRows = safeRows(staffRes, []).filter(row => row.is_active !== false).map(mapStaff);
-      const mergedStaff = mergeStaffWhitelist(staffRows);
-      const currentStaff = findStaffByWallet(mergedStaff, currentWallet) || mergedStaff[0] || DEFAULT_STAFF_WALLETS[0];
-      const store = mapStore(storeRow || { id: resolvedStoreId, name: 'Minh Chau Grocery', branch_name: 'Da Nang Branch' });
-      const receiverWallet = resolveReceiverWallet(settingsRow.arc_receiver_wallet);
-
-      setData({
-        store: { ...store, id: resolvedStoreId, network: settingsRow.arc_network === 'arc-mainnet' ? 'Arc Mainnet' : 'Arc Testnet' },
-        settings: {
-          taxRate: Number(settingsRow.tax_rate || 10),
-          earnRate: '1 USDC paid = 1 point',
-          redeemRate: '100 points = 1 USDC discount',
-          maxRedeem: 'Max 20% of invoice total',
-        },
-        receiverWallet,
-        staff: currentStaff,
-        staffMembers: mergedStaff,
-        categoryRows,
-        categories: categories.length > 1 ? categories : demoState.categories,
-        products: products.length ? products : demoState.products,
-        customers: customers.length ? customers : demoState.customers,
-        orders: safeRows(orderRes, []).map(mapOrder),
-        payments: [],
-        movements: [],
-        pointsHistory: safeRows(pointsRes, []),
-        inventory: safeRows(inventoryRes, []).map(mapInventory),
-        warehouses: safeRows(warehouseRes, []).map(mapWarehouse),
-        purchaseOrders: safeRows(purchaseRes, []).map(mapPurchaseOrder),
-      });
-
-      setIds({ storeId: resolvedStoreId, staffId: currentStaff.id || null });
-      setCustomerId(current => current || customers[0]?.id || '');
-      setDbMessage(products.length
-        ? `Connected to live Supabase. store_id: ${String(resolvedStoreId).slice(0, 8)}...`
-        : `Connected to Supabase, but products did not load. store_id: ${String(resolvedStoreId).slice(0, 8)}...`);
+      const result = await loadPaynetNetwork();
+      if (result?.stores?.length) {
+        const accessStores = applyRoleAccessToStores(result.stores, roleAccessConfig);
+        setStores(accessStores);
+        setNetworkCustomers(result.customers || []);
+        setNetworkPointsHistory(result.pointsHistory || []);
+        setSelectedStoreId(current => accessStores.some(store => store.id === current) ? current : accessStores[0].id);
+        setDbMessage(`Connected to Supabase. Loaded ${accessStores.length} stores.`);
+      }
     } catch (error) {
       console.error(error);
-      setData({ ...demoState, store: { ...demoState.store, id: DEFAULT_STORE_ID }, staff: findStaffByWallet(demoState.staffMembers || DEFAULT_STAFF_WALLETS, currentWallet) || DEFAULT_STAFF_WALLETS[0] });
-      setIds({ storeId: DEFAULT_STORE_ID, staffId: null });
-      setCustomerId(demoState.customers[0]?.id || '');
-      setDbMessage(`Supabase error: ${error.message || error}. Using local demo data with default store_id.`);
+      setDbMessage(`Supabase error: ${error.message || error}. Using local fallback data.`);
     }
   }
 
-  useEffect(() => { loadData(); }, [currentWallet]);
+  useEffect(() => {
+    reloadNetwork();
+  }, []);
 
-  const selectedCustomer = data.customers.find(customer => customer.id === customerId) || null;
+  const roleContext = useMemo(
+    () => resolveNetworkRole(
+      stores,
+      currentWallet,
+      roleAccessConfig
+    ),
+    [stores, currentWallet]
+  );
+
+  const isSystemAdmin = connected && roleContext.roleKey === 'system_admin';
+  const isGuest = connected && roleContext.roleKey === 'guest';
+  const roleStore = roleContext.store;
+  const allowedPages = useMemo(() => {
+    if (isSystemAdmin) return SYSTEM_ADMIN_ALLOWED_PAGES;
+    if (isGuest || !connected) return [];
+    if (isStoreOwnerRole(roleContext.roleKey)) return OWNER_ALLOWED_PAGES;
+    return STAFF_ALLOWED_PAGES;
+  }, [connected, isGuest, isSystemAdmin, roleContext.roleKey]);
+
+  useEffect(() => {
+    if (!connected || !currentWallet) return;
+
+    if (roleContext.roleKey === 'system_admin') {
+      setPage(current => current || 'admin');
+      setSelectedStoreId(current => current || firstActiveStore(stores)?.id || '');
+      return;
+    }
+
+    if (roleStore?.id) {
+      setSelectedStoreId(roleStore.id);
+      setPage(current => {
+        const pages = isStoreOwnerRole(roleContext.roleKey) ? OWNER_ALLOWED_PAGES : STAFF_ALLOWED_PAGES;
+        return pages.includes(current) ? current : 'pos';
+      });
+      return;
+    }
+
+    if (roleContext.roleKey === 'guest') {
+      setPage('dashboard');
+    }
+  }, [connected, currentWallet, roleContext.roleKey, roleStore?.id, stores]);
+
+  useEffect(() => {
+    if (!connected || isGuest || !allowedPages.length) return;
+    if (!allowedPages.includes(page)) {
+      setPage(allowedPages[0]);
+    }
+  }, [allowedPages, connected, isGuest, page]);
+
+  const activeStore = useMemo(() => {
+    if (!stores.length) return null;
+    if (isGuest) return null;
+    return stores.find(store => store.id === selectedStoreId) || firstActiveStore(stores);
+  }, [stores, selectedStoreId, isGuest]);
+
+  const data = useMemo(
+    () => activeStore ? buildStoreState(activeStore) : buildStoreState(firstActiveStore(initialNetworkStores)),
+    [activeStore]
+  );
+
+  const staffMembers = data.staffMembers || [];
+  const activeStaff = roleContext.member;
+  const displayStaff = activeStaff || { name: 'Not connected', role: 'Guest', roleKey: 'guest', wallet: currentWallet, avatar: 'U' };
+  const isStoreOwner = isStoreOwnerRole(roleContext.roleKey);
+  const canManageStore = isSystemAdmin || isStoreOwner;
+  const canUsePos = connected && Boolean(activeStore) && activeStore.status !== 'disabled' && roleContext.roleKey !== 'guest';
+  const isManager = canManageStore;
+  const posLockMessage = !connected
+    ? 'Connect or preview an approved wallet to create invoices.'
+    : activeStore?.status === 'disabled'
+      ? 'This store is disabled by the system admin.'
+      : roleContext.roleKey === 'guest'
+        ? 'This wallet is not assigned to any participating store.'
+        : '';
+
+  const customers = networkCustomers.length ? networkCustomers : data.customers;
+  const visibleStores = isSystemAdmin ? stores : activeStore ? [activeStore] : [];
+  const safeReceiverWallet = isGuest ? '' : data.receiverWallet;
+  const safeStaffMembers = isGuest ? [] : staffMembers;
+  const selectedCustomer = customers.find(customer => customer.id === customerId) || customers[0] || null;
   const cartRows = useMemo(() => cart.map(item => {
-    const product = data.products.find(row => row.id === item.id);
+    const product = ensureStoreProducts(activeStore).find(row => row.id === item.id);
     return product ? { ...product, qty: item.qty } : null;
-  }).filter(Boolean), [cart, data.products]);
-
-  const staffMembers = ensureStaffArray(data.staffMembers);
-
-  const activeStaff = currentWallet
-    ? findStaffByWallet(staffMembers, currentWallet)
-    : null;
-
-  const isWhitelistedStaff = Boolean(connected && currentWallet && activeStaff?.wallet);
-  const canUsePos = isWhitelistedStaff;
-
-  const posLockMessage = !connected || !currentWallet
-    ? 'Connect a whitelisted staff wallet to create invoices.'
-    : !isWhitelistedStaff
-      ? 'This wallet is not whitelisted for POS access.'
-      : '';
-
-  const displayStaff = activeStaff || data.staff || DEFAULT_STAFF_WALLETS[0];
-
-  const isManager = isWhitelistedStaff
-    ? isManagerWallet(currentWallet, activeStaff)
-    : false;
-
-  function requireWhitelistedStaff(actionName = 'perform this action') {
-    if (!connected || !currentWallet) {
-      alert(`Please connect a whitelisted staff wallet before you ${actionName}.`);
-      return false;
-    }
-
-    if (!isWhitelistedStaff) {
-      alert('This wallet is not whitelisted. Only approved staff wallets can use the POS.');
-      return false;
-    }
-
-    return true;
-  }
+  }).filter(Boolean), [cart, activeStore]);
 
   const taxRate = Number(data.settings?.taxRate || 10);
   const subtotal = cartRows.reduce((sum, row) => sum + row.price * row.qty, 0);
@@ -270,9 +249,23 @@ export default function App() {
   const total = Math.max(grossTotal - pointsDiscount, 0);
   const pointsEarned = pointsFromRaw(total);
 
-  function createNewInvoice() {
-    if (!requireWhitelistedStaff('create an invoice')) return;
+  function updateActiveStore(updater) {
+    setStores(current => current.map(store => {
+      if (store.id !== activeStore?.id) return store;
+      return updater(store);
+    }));
+  }
 
+  function requireStoreAccess(actionName = 'perform this action') {
+    if (!canUsePos) {
+      alert(posLockMessage || `Cannot ${actionName}.`);
+      return false;
+    }
+    return true;
+  }
+
+  function createNewInvoice() {
+    if (!requireStoreAccess('create an invoice')) return;
     setInvoiceActive(true);
     setCart([]);
     setCheckout(null);
@@ -282,8 +275,7 @@ export default function App() {
   }
 
   function addToCart(product) {
-    if (!requireWhitelistedStaff('add products to an invoice')) return;
-
+    if (!requireStoreAccess('add products to an invoice')) return;
     if (!invoiceActive) setInvoiceActive(true);
     setCheckout(null);
     setPaymentStatus('idle');
@@ -295,14 +287,12 @@ export default function App() {
   }
 
   function changeQty(productId, delta) {
-    if (!requireWhitelistedStaff('edit invoice quantity')) return;
-
+    if (!requireStoreAccess('edit invoice quantity')) return;
     setCart(current => current.map(item => item.id === productId ? { ...item, qty: Math.max(1, item.qty + delta) } : item));
   }
 
   function removeItem(productId) {
-    if (!requireWhitelistedStaff('remove products from an invoice')) return;
-
+    if (!requireStoreAccess('remove products from an invoice')) return;
     setCart(current => current.filter(item => item.id !== productId));
   }
 
@@ -318,116 +308,130 @@ export default function App() {
   }
 
   async function handleCreateCheckout() {
-    if (!requireWhitelistedStaff('create a checkout order')) return;
-
+    if (!requireStoreAccess('create a checkout order')) return;
     if (!cartRows.length) return;
-    setPaymentStatus('checking');
-    try {
-      if (!hasSupabaseConfig || !supabase) {
-        throw new Error('Supabase is not configured. Check your .env file and restart npm run dev.');
-      }
 
-      const resolvedStoreId = firstNonEmpty(
-        ids.storeId,
-        data.store?.id,
-        cartRows.find(row => row.raw?.store_id)?.raw?.store_id,
-        DEFAULT_STORE_ID
-      );
+    let order = null;
 
-      if (!isUuid(resolvedStoreId)) {
-        throw new Error(`Invalid store_id: ${resolvedStoreId || 'empty'}. Check public.stores.`);
-      }
-
-      const invalidItems = cartRows.filter(row => !isUuid(row.id));
-      if (invalidItems.length) {
-        throw new Error('Products are still loaded from local demo data, not Supabase. Click Reload. If P/S Toothpaste is visible, the product query is still falling back to demo data.');
-      }
-
-      const order = await createPosOrder({
-        storeId: resolvedStoreId,
-        staffId: ids.staffId,
-        customerId: customerId || null,
-        items: cartRows,
-        pointsUsed,
-        pointsDiscount,
-        taxRate,
-        taxAmount,
-      });
-
-      if (!order?.checkout_token || !order?.order_id) {
-        throw new Error('create_pos_order did not return order_id and checkout_token. Check the RPC return payload.');
-      }
-
-      setIds(current => ({ ...current, storeId: resolvedStoreId }));
-      setCheckout(order);
-      setPaymentStatus('pending');
-    } catch (error) {
-      console.error(error);
-      alert(error.message || 'Cannot create checkout.');
-      setPaymentStatus('idle');
-    }
-  }
-
-  async function handleConfirmMockPayment() {
-    if (!requireWhitelistedStaff('confirm payment from POS')) return;
-
-    if (!checkout) return;
-    setPaymentStatus('checking');
-    try {
-      if (checkout?.order_id && hasSupabaseConfig) {
-        await confirmArcPayment({
-          orderId: checkout.order_id,
-          payerWallet: selectedCustomer?.wallet || activeStaff?.wallet || currentWallet,
-          checkoutToken: checkout.checkout_token,
-        });
-        await loadData();
-      } else {
-        const demoOrder = {
-          id: checkout.order_id,
-          code: checkout.order_code,
-          customer: selectedCustomer?.name || 'Guest',
-          customerWallet: selectedCustomer?.wallet || '',
+    if (hasSupabaseConfig) {
+      try {
+        order = await createCheckoutOrder({
+          store: activeStore,
+          staff: activeStaff,
+          customer: selectedCustomer,
+          cartRows,
           subtotal,
+          taxRate,
+          taxAmount,
           pointsUsed,
           pointsDiscount,
           total,
-          status: 'paid',
-          paymentStatus: 'paid',
-          paymentMethod: 'arc',
-          txHash: `0xmock${Date.now().toString(16)}`,
-          createdAt: new Date().toISOString(),
-          paidAt: new Date().toISOString(),
-          items: cartRows.map(row => ({ id: row.id, productId: row.id, name: row.name, sku: row.sku, qty: row.qty, unitPrice: row.price, total: row.price * row.qty })),
-        };
-        setData(current => ({ ...current, orders: [demoOrder, ...current.orders] }));
+        });
+      } catch (error) {
+        console.error(error);
+        alert(error.message || 'Cannot create checkout in Supabase.');
+        return;
       }
-      setPaymentStatus('paid');
-      setCart([]);
-      setInvoiceActive(false);
-    } catch (error) {
-      console.error(error);
-      alert(error.message || 'Cannot confirm payment.');
-      setPaymentStatus('pending');
+    } else {
+      const token = `${activeStore.id}-${Date.now().toString(16)}`;
+      order = {
+        order_id: `demo-${token}`,
+        order_code: `INV-${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${String(Date.now()).slice(-5)}`,
+        checkout_token: token,
+      };
     }
+
+    const pendingOrder = {
+      id: order.order_id,
+      code: order.order_code,
+      checkoutToken: order.checkout_token,
+      storeId: activeStore.id,
+      storeName: activeStore.name,
+      storeBranch: activeStore.branch,
+      receiverWallet: activeStore.receiverWallet,
+      customer: selectedCustomer?.name || 'Guest',
+      customerWallet: selectedCustomer?.wallet || '',
+      subtotal,
+      taxAmount,
+      taxRate,
+      pointsUsed,
+      pointsDiscount,
+      total,
+      status: 'pending',
+      paymentStatus: 'pending',
+      paymentMethod: 'usdc',
+      createdAt: new Date().toISOString(),
+      items: cartRows.map(row => ({
+        id: row.id,
+        productId: row.id,
+        name: row.name,
+        sku: row.sku,
+        qty: row.qty,
+        unitPrice: row.price,
+        total: row.price * row.qty,
+      })),
+    };
+
+    saveStoredCheckout(pendingOrder);
+    setCheckout(order);
+    setPaymentStatus('pending');
+    if (hasSupabaseConfig) await reloadNetwork();
+  }
+
+  async function handleConfirmMockPayment() {
+    if (!requireStoreAccess('confirm payment')) return;
+    if (!checkout) return;
+
+    const paidOrder = {
+      id: checkout.order_id,
+      code: checkout.order_code,
+      checkoutToken: checkout.checkout_token,
+      storeId: activeStore.id,
+      customer: selectedCustomer?.name || 'Guest',
+      customerWallet: selectedCustomer?.wallet || '',
+      subtotal,
+      pointsUsed,
+      pointsDiscount,
+      total,
+      status: 'paid',
+      paymentStatus: 'paid',
+      paymentMethod: 'arc',
+      txHash: `0xmock${Date.now().toString(16)}`,
+      createdAt: new Date().toISOString(),
+      paidAt: new Date().toISOString(),
+      items: cartRows.map(row => ({ id: row.id, productId: row.id, name: row.name, sku: row.sku, qty: row.qty, unitPrice: row.price, total: row.price * row.qty })),
+    };
+
+    updateActiveStore(store => ({
+      ...store,
+      orders: [paidOrder, ...(store.orders || [])],
+      products: store.products.map(product => {
+        const cartItem = cartRows.find(item => item.id === product.id);
+        return cartItem ? { ...product, stock: Math.max(0, Number(product.stock || 0) - Number(cartItem.qty || 0)) } : product;
+      }),
+    }));
+
+    saveStoredCheckout(paidOrder);
+
+    setPaymentStatus('paid');
+    setCart([]);
+    setInvoiceActive(false);
   }
 
   async function deleteProduct(productId) {
-    if (!isManager) return alert('Only the manager wallet can edit products.');
-    if (!confirm('Hide this product from POS?')) return;
-    if (hasSupabaseConfig && supabase && !String(productId).startsWith('P')) {
-      const { error } = await supabase.from('products').update({ is_active: false }).eq('id', productId);
-      if (error) return alert(error.message);
-      await loadData();
-      return;
-    }
-    setData(current => ({ ...current, products: current.products.filter(product => product.id !== productId) }));
+    if (!canManageStore) return alert('Only the system admin or store owner can edit products.');
+    if (!confirm('Disable this product from POS?')) return;
+    updateActiveStore(store => ({
+      ...store,
+      products: store.products.map(product => product.id === productId ? { ...product, active: false } : product),
+    }));
   }
 
-
   async function saveProduct(product) {
-    if (!isManager) return alert('Only the manager wallet can edit products.');
+    if (!canManageStore) return alert('Only the system admin or store owner can edit products.');
 
-    const id = product.id || `P${Date.now().toString().slice(-6)}`;
+    const isNew = product === 'new' || !product.id;
+    const id = isNew ? `${activeStore.id.slice(-3).toUpperCase()}-${Date.now().toString().slice(-5)}` : product.id;
     const normalized = {
       ...product,
       id,
@@ -436,156 +440,95 @@ export default function App() {
       price: Number(product.price || 0),
       costPrice: Number(product.costPrice || 0),
       active: product.active !== false,
+      status: product.status || (product.active === false ? 'inactive' : 'active'),
     };
 
-    const safeStoreIdForSave = ids.storeId || data.store?.id || DEFAULT_STORE_ID;
-
-    if (hasSupabaseConfig && supabase && safeStoreIdForSave && !String(id).startsWith('P')) {
-      const categoryRow = (data.categoryRows || []).find(row => row.name === product.category || row.id === product.categoryId);
-      const payload = {
-        name: product.originalName || product.name,
-        sku: product.sku,
-        barcode: product.barcode || null,
-        category_id: categoryRow?.id || product.categoryId || null,
-        unit: product.unit || 'unit',
-        sell_price: Number(product.price || 0),
-        cost_price: Number(product.costPrice || 0),
-        stock_quantity: Number(product.stock || 0),
-        min_stock: Number(product.min || 0),
-        description: product.description || '',
-        image_url: product.image || '',
-        is_active: product.active !== false,
-        updated_at: new Date().toISOString(),
-      };
-      const { error } = await supabase.from('products').update(payload).eq('id', id);
-      if (error) return alert(error.message);
-      await loadData();
-      setEditingProduct(null);
-      return;
-    }
-
-    if (hasSupabaseConfig && supabase && safeStoreIdForSave && String(id).startsWith('P')) {
-      const categoryRow = (data.categoryRows || []).find(row => row.name === product.category || row.id === product.categoryId);
-      const payload = {
-        store_id: safeStoreIdForSave,
-        name: product.name,
-        sku: product.sku,
-        barcode: product.barcode || null,
-        category_id: categoryRow?.id || null,
-        unit: product.unit || 'unit',
-        sell_price: Number(product.price || 0),
-        cost_price: Number(product.costPrice || 0),
-        stock_quantity: Number(product.stock || 0),
-        min_stock: Number(product.min || 0),
-        description: product.description || '',
-        image_url: product.image || '',
-        is_active: product.active !== false,
-      };
-      const { error } = await supabase.from('products').insert(payload);
-      if (error) return alert(error.message);
-      await loadData();
-      setEditingProduct(null);
-      return;
-    }
-
-    setData(current => {
-      const exists = current.products.some(item => item.id === id);
+    updateActiveStore(store => {
+      const exists = store.products.some(item => item.id === id);
       return {
-        ...current,
-        products: exists ? current.products.map(item => item.id === id ? normalized : item) : [normalized, ...current.products],
+        ...store,
+        products: exists
+          ? store.products.map(item => item.id === id ? normalized : item)
+          : [normalized, ...store.products],
       };
     });
     setEditingProduct(null);
+    if (hasSupabaseConfig) {
+      try {
+        await saveProductRecord(activeStore.id, normalized);
+        await reloadNetwork();
+      } catch (error) {
+        alert(error.message || error);
+      }
+    }
   }
 
   async function saveStaffMember(staffDraft) {
-    if (!isManager) return alert('Only the manager wallet can edit staff whitelist.');
+    if (!canManageStore) return alert('Only the system admin or store owner can edit staff.');
     const wallet = staffDraft.wallet.trim();
     const normalized = {
       id: staffDraft.id || `staff-${Date.now()}`,
       name: staffDraft.name.trim(),
-      role: staffDraft.role === 'manager' ? 'Manager' : staffDraft.role.charAt(0).toUpperCase() + staffDraft.role.slice(1),
+      role: titleCaseRole(staffDraft.role),
       roleKey: staffDraft.role,
       wallet,
-      avatar: staffDraft.role === 'manager' ? '👨🏻‍💼' : '👩🏻‍💼',
+      avatar: staffDraft.role === 'owner' ? 'SO' : 'ST',
       active: staffDraft.active !== false,
     };
 
-    if (hasSupabaseConfig && supabase) {
-      const payload = {
-        full_name: normalized.name,
-        role: staffDraft.role,
-        wallet_address: wallet,
-        is_active: normalized.active,
-      };
-      if (ids.storeId || data.store?.id || DEFAULT_STORE_ID) payload.store_id = ids.storeId || data.store?.id || DEFAULT_STORE_ID;
-      let result;
-      if (staffDraft.id && !String(staffDraft.id).startsWith('staff-')) {
-        result = await supabase.from('staff').update(payload).eq('id', staffDraft.id);
-      } else {
-        result = await supabase.from('staff').insert(payload);
-      }
-      if (result.error) return alert(result.error.message);
-      await loadData();
-      return;
-    }
-
-    setData(current => {
-      const existing = (current.staffMembers || []).some(member => normalizeWallet(member.wallet) === normalizeWallet(wallet));
+    updateActiveStore(store => {
+      const existing = (store.staffMembers || []).some(member => normalizeWallet(member.wallet) === normalizeWallet(wallet));
       return {
-        ...current,
+        ...store,
         staffMembers: existing
-          ? current.staffMembers.map(member => normalizeWallet(member.wallet) === normalizeWallet(wallet) ? { ...member, ...normalized } : member)
-          : [normalized, ...(current.staffMembers || [])],
+          ? store.staffMembers.map(member => normalizeWallet(member.wallet) === normalizeWallet(wallet) ? { ...member, ...normalized } : member)
+          : [normalized, ...(store.staffMembers || [])],
       };
     });
+    if (hasSupabaseConfig) {
+      try {
+        await saveStaffRecord(activeStore.id, staffDraft);
+        await reloadNetwork();
+      } catch (error) {
+        alert(error.message || error);
+      }
+    }
   }
 
   async function disableStaffMember(member) {
-    if (!isManager) return alert('Only the manager wallet can edit staff whitelist.');
-    if (normalizeWallet(member.wallet) === normalizeWallet(MANAGER_WALLET)) return alert('The manager wallet cannot be disabled.');
+    if (!canManageStore) return alert('Only the system admin or store owner can edit staff.');
+    if (normalizeWallet(member.wallet) === normalizeWallet(activeStore.ownerWallet)) return alert('The store owner wallet cannot be disabled from the store staff page.');
     if (!confirm(`Disable ${member.name || member.wallet}?`)) return;
 
-    if (hasSupabaseConfig && supabase && member.id && !String(member.id).startsWith('staff-')) {
-      const { error } = await supabase.from('staff').update({ is_active: false }).eq('id', member.id);
-      if (error) return alert(error.message);
-      await loadData();
-      return;
-    }
-
-    setData(current => ({
-      ...current,
-      staffMembers: (current.staffMembers || []).map(item => normalizeWallet(item.wallet) === normalizeWallet(member.wallet) ? { ...item, active: false } : item),
+    updateActiveStore(store => ({
+      ...store,
+      staffMembers: (store.staffMembers || []).map(item => normalizeWallet(item.wallet) === normalizeWallet(member.wallet) ? { ...item, active: false } : item),
     }));
+    if (hasSupabaseConfig && member.id && !String(member.id).startsWith('staff-')) {
+      try {
+        await disableStaffRecord(member.id);
+        await reloadNetwork();
+      } catch (error) {
+        alert(error.message || error);
+      }
+    }
   }
 
   async function handleConnectWallet() {
     try {
-      const wallet = await connectArcWallet();
-      const walletAddress = wallet.address;
-      const isAllowed = Boolean(findStaffByWallet(data.staffMembers || DEFAULT_STAFF_WALLETS, walletAddress));
-
-      setCurrentWallet(walletAddress);
+      const wallet = await connectEvmWallet(getPaymentChain(connectChainCode(activeStore)));
+      setCurrentWallet(wallet.address);
       setConnected(true);
-
-      if (!isAllowed) {
-        setInvoiceActive(false);
-        setCart([]);
-        setCheckout(null);
-        setPaymentStatus('idle');
-        setPointsUsed(0);
-        alert('Wallet connected, but it is not whitelisted. Only approved staff wallets can use the POS.');
-      }
     } catch (error) {
       console.error(error);
       alert(error.message || 'Cannot connect wallet.');
     }
   }
 
-
   function handleSignOut() {
     setConnected(false);
     setCurrentWallet('');
+    setPage('admin');
     setInvoiceActive(false);
     setCart([]);
     setCheckout(null);
@@ -593,33 +536,243 @@ export default function App() {
     setPointsUsed(0);
   }
 
+  function handleAddStore(draft) {
+    const id = `store-${Date.now().toString(16)}`;
+    const storeSlug = slugifyStoreName(draft.name);
+    const newStore = {
+      id,
+      name: draft.name.trim(),
+      branch: draft.branch.trim() || 'Main Branch',
+      type: draft.type,
+      status: 'active',
+      accent: '#2563eb',
+      imageFolder: `/png/stores/${storeSlug}/products`,
+      ownerWallet: draft.ownerWallet.trim(),
+      receiverWallet: draft.ownerWallet.trim(),
+      staffMembers: [
+        { id: `${id}-owner`, name: `${draft.name.trim()} Owner`, role: 'Owner', roleKey: 'owner', wallet: draft.ownerWallet.trim(), avatar: 'SO', active: true },
+      ],
+      categories: ['All', 'Popular', 'Food', 'Drinks'],
+      warehouses: [{ id: `${id}-main`, name: 'Main Store', address: draft.branch.trim() || 'Main Branch', status: 'active', active: true }],
+      products: [],
+      orders: [],
+    };
+    setStores(current => [newStore, ...current]);
+    setSelectedStoreId(id);
+    if (hasSupabaseConfig) {
+      createStoreRecord(draft).then(reloadNetwork).catch(error => alert(error.message || error));
+    }
+  }
+
+  function handleUpdateStore(storeId, draft) {
+    setStores(current => current.map(store => {
+      if (store.id !== storeId) return store;
+      const ownerMember = {
+        id: `${store.id}-owner`,
+        name: `${draft.name || store.name} Owner`,
+        role: 'Owner',
+        roleKey: 'owner',
+        wallet: draft.ownerWallet,
+        avatar: 'SO',
+        active: true,
+      };
+      const staffWithoutOldOwner = (store.staffMembers || []).filter(member => normalizeWallet(member.wallet) !== normalizeWallet(store.ownerWallet));
+
+      return {
+        ...store,
+        name: draft.name,
+        branch: draft.branch,
+        type: draft.type,
+        status: draft.status,
+        ownerWallet: draft.ownerWallet,
+        receiverWallet: draft.ownerWallet,
+        imageFolder: store.imageFolder || `/png/stores/${slugifyStoreName(draft.name)}/products`,
+        staffMembers: [ownerMember, ...staffWithoutOldOwner],
+      };
+    }));
+    if (hasSupabaseConfig) {
+      updateStoreRecord(storeId, draft).then(reloadNetwork).catch(error => alert(error.message || error));
+    }
+  }
+
+  function handleToggleStoreStatus(storeId) {
+    const store = stores.find(item => item.id === storeId);
+    const nextStatus = store?.status === 'disabled' ? 'active' : 'disabled';
+    setStores(current => current.map(store => store.id === storeId
+      ? { ...store, status: nextStatus }
+      : store));
+    if (hasSupabaseConfig) {
+      updateStoreStatusRecord(storeId, nextStatus).then(reloadNetwork).catch(error => alert(error.message || error));
+    }
+  }
+
+  function handleUpdateStoreOwner(storeId, wallet) {
+    setStores(current => current.map(store => {
+      if (store.id !== storeId) return store;
+      const ownerMember = {
+        id: `${store.id}-owner`,
+        name: `${store.name} Owner`,
+        role: 'Owner',
+        roleKey: 'owner',
+        wallet,
+        avatar: 'SO',
+        active: true,
+      };
+      const staffWithoutOldOwner = (store.staffMembers || []).filter(member => normalizeWallet(member.wallet) !== normalizeWallet(store.ownerWallet));
+      return {
+        ...store,
+        ownerWallet: wallet,
+        receiverWallet: wallet,
+        staffMembers: [ownerMember, ...staffWithoutOldOwner],
+      };
+    }));
+    if (hasSupabaseConfig) {
+      updateStoreOwnerRecord(storeId, wallet).then(reloadNetwork).catch(error => alert(error.message || error));
+    }
+  }
+
+  function handleUpdateProductStatus(productId, status) {
+    updateActiveStore(store => ({
+      ...store,
+      products: store.products.map(product => product.id === productId
+        ? { ...product, status, active: status === 'active' }
+        : product),
+    }));
+    if (hasSupabaseConfig) {
+      updateProductStatusRecord(productId, status).then(reloadNetwork).catch(error => alert(error.message || error));
+    }
+  }
+
+  function handleAddWarehouse(draft) {
+    updateActiveStore(store => ({
+      ...store,
+      warehouses: [
+        {
+          id: `${store.id}-warehouse-${Date.now().toString(16)}`,
+          name: draft.name.trim(),
+          address: draft.address.trim(),
+          status: draft.status || 'active',
+          active: draft.status === 'active',
+        },
+        ...(store.warehouses || []),
+      ],
+    }));
+    if (hasSupabaseConfig) {
+      addWarehouseRecord(activeStore.id, draft).then(reloadNetwork).catch(error => alert(error.message || error));
+    }
+  }
+
+  function handleUpdateWarehouseStatus(warehouseId, status) {
+    updateActiveStore(store => ({
+      ...store,
+      warehouses: (store.warehouses || []).map(warehouse => warehouse.id === warehouseId
+        ? { ...warehouse, status, active: status === 'active' }
+        : warehouse),
+    }));
+    if (hasSupabaseConfig) {
+      updateWarehouseStatusRecord(warehouseId, status).then(reloadNetwork).catch(error => alert(error.message || error));
+    }
+  }
+
+  function handleAddInventoryProduct(draft) {
+    const warehouse = (activeStore.warehouses || []).find(item => item.id === draft.warehouseId);
+    updateActiveStore(store => ({
+      ...store,
+      products: store.products.map(product => product.id === draft.productId
+        ? {
+            ...product,
+            stock: Number(draft.quantity || 0),
+            min: Number(draft.min || 0),
+            warehouseId: draft.warehouseId,
+            warehouse: warehouse?.name || product.warehouse,
+          }
+        : product),
+    }));
+  }
+
+  function handleUpdateInventoryWarehouse(productId, warehouseId) {
+    const warehouse = (activeStore.warehouses || []).find(item => item.id === warehouseId);
+    updateActiveStore(store => ({
+      ...store,
+      products: store.products.map(product => product.id === productId
+        ? { ...product, warehouseId, warehouse: warehouse?.name || product.warehouse }
+        : product),
+    }));
+  }
+
   function renderPage() {
+    if (isGuest) {
+      return (
+        <section className="panel full-page-panel locked-access-panel">
+          <div className="locked-box">
+            <strong>Wallet not whitelisted</strong>
+            <span>This wallet is not assigned as a system admin, store owner, or store staff wallet.</span>
+          </div>
+        </section>
+      );
+    }
+
+    if (connected && allowedPages.length && !allowedPages.includes(page)) {
+      return (
+        <section className="panel full-page-panel locked-access-panel">
+          <div className="locked-box">
+            <strong>Role access required</strong>
+            <span>This wallet does not have permission to open this section.</span>
+          </div>
+        </section>
+      );
+    }
+
+    const activeProducts = data.products.filter(product => (product.status || (product.active === false ? 'inactive' : 'active')) === 'active');
     const common = {
-      products: data.products,
-      customers: data.customers,
-      orders: data.orders,
+      products: activeProducts,
+      customers,
+      orders: activeStore?.orders || [],
       inventory: data.inventory || [],
       warehouses: data.warehouses || [],
       purchaseOrders: data.purchaseOrders || [],
       settings: data.settings || {},
       store: data.store,
-      receiverWallet: data.receiverWallet,
+      receiverWallet: safeReceiverWallet,
       taxRate,
       isManager,
     };
+
+    if (page === 'admin') {
+      return (
+        <SystemAdminPage
+          stores={stores}
+          selectedStoreId={selectedStoreId}
+          onSelectStore={setSelectedStoreId}
+          onAddStore={handleAddStore}
+          onUpdateStore={handleUpdateStore}
+          onToggleStoreStatus={handleToggleStoreStatus}
+          onUpdateStoreOwner={handleUpdateStoreOwner}
+          currentWallet={currentWallet}
+        />
+      );
+    }
     if (page === 'dashboard') return <DashboardPage {...common} />;
     if (page === 'orders') return <OrdersPage {...common} />;
-    if (page === 'customers') return <CustomersPage customers={data.customers} />;
-    if (page === 'staff') return <StaffPage staffMembers={staffMembers} isManager={isManager} currentWallet={currentWallet} onSaveStaff={saveStaffMember} onDisableStaff={disableStaffMember} />;
-    if (page === 'products') return <ProductsPage products={data.products} setEditingProduct={setEditingProduct} canManage={isManager} />;
-    if (page === 'inventory') return <InventoryPage products={data.products} inventory={data.inventory || []} setEditingProduct={setEditingProduct} canManage={isManager} />;
-    if (page === 'points') return <PointsHistoryPage pointsHistory={data.pointsHistory} />;
+    if (page === 'customers') return <CustomersPage customers={customers} />;
+    if (page === 'staff') return <StaffPage staffMembers={safeStaffMembers} isManager={canManageStore} currentWallet={currentWallet} onSaveStaff={saveStaffMember} onDisableStaff={disableStaffMember} />;
+    if (page === 'products') return <ProductsPage products={data.products} setEditingProduct={setEditingProduct} canManage={canManageStore} onUpdateProductStatus={handleUpdateProductStatus} />;
+    if (page === 'inventory') return <InventoryPage products={data.products} warehouses={data.warehouses || []} inventory={data.inventory || []} canManage={canManageStore} onAddInventoryProduct={handleAddInventoryProduct} onUpdateInventoryWarehouse={handleUpdateInventoryWarehouse} />;
+    if (page === 'points') {
+      return (
+        <PointsHistoryPage
+          pointsHistory={data.pointsHistory}
+          stores={visibleStores}
+          scopeLabel={isSystemAdmin ? 'Network Analytics' : 'Store Analytics'}
+        />
+      );
+    }
     if (page === 'rewards') return <RewardsPage settings={data.settings || {}} />;
-    if (page === 'warehouse') return <WarehousePage warehouses={data.warehouses || []} inventory={data.inventory || []} />;
+    if (page === 'warehouse') return <WarehousePage warehouses={data.warehouses || []} inventory={data.inventory || []} canManage={canManageStore} onAddWarehouse={handleAddWarehouse} onUpdateWarehouseStatus={handleUpdateWarehouseStatus} />;
     if (page === 'receiving') return <PurchaseOrdersPage purchaseOrders={data.purchaseOrders || []} />;
-    if (page === 'revenue') return <RevenuePage orders={data.orders} />;
-    if (page === 'best-sellers') return <BestSellersPage orders={data.orders} products={data.products} />;
-    if (page === 'settings') return <SettingsPage store={data.store} receiverWallet={data.receiverWallet} settings={data.settings || {}} />;
+    if (page === 'revenue') return <RevenuePage orders={activeStore?.orders || []} />;
+    if (page === 'best-sellers') return <BestSellersPage orders={activeStore?.orders || []} products={common.products} />;
+    if (page === 'settings') return <SettingsPage store={data.store} receiverWallet={safeReceiverWallet} settings={data.settings || {}} canViewWallet={!isGuest} />;
     if (page === 'pos') {
       return (
         <POSPage
@@ -628,7 +781,7 @@ export default function App() {
           posLockMessage={posLockMessage}
           onCreateInvoice={createNewInvoice}
           cartRows={cartRows}
-          customers={data.customers}
+          customers={customers}
           customerId={customerId}
           setCustomerId={setCustomerId}
           productSearch={productSearch}
@@ -650,8 +803,8 @@ export default function App() {
           onConfirmMockPayment={handleConfirmMockPayment}
           checkout={checkout}
           paymentStatus={paymentStatus}
-          receiverWallet={data.receiverWallet}
-          products={data.products}
+          receiverWallet={safeReceiverWallet}
+          products={common.products}
           categories={data.categories}
           activeCategory={activeCategory}
           setActiveCategory={setActiveCategory}
@@ -659,7 +812,7 @@ export default function App() {
           addToCart={addToCart}
           setEditingProduct={setEditingProduct}
           deleteProduct={deleteProduct}
-          canManage={isManager}
+          canManage={canManageStore}
         />
       );
     }
@@ -670,17 +823,26 @@ export default function App() {
   if (window.location.pathname.startsWith('/checkout')) {
     return (
       <CustomerCheckoutPage
-        demoOrders={data.orders}
+        demoOrders={stores.flatMap(store => store.orders || [])}
         settings={data.settings || {}}
         store={data.store}
-        receiverWallet={data.receiverWallet}
+        receiverWallet={safeReceiverWallet}
       />
     );
   }
 
   return (
     <div className="app-shell">
-      <Sidebar page={page} onPageChange={setPage} store={data.store} />
+      <Sidebar
+        page={page}
+        onPageChange={setPage}
+        store={data.store}
+        stores={stores}
+        selectedStoreId={selectedStoreId}
+        onStoreChange={setSelectedStoreId}
+        isSystemAdmin={isSystemAdmin}
+        isGuest={isGuest}
+      />
       <main className="main-shell">
         <Header
           query={query}
@@ -689,19 +851,18 @@ export default function App() {
           onConnect={handleConnectWallet}
           onSignOut={handleSignOut}
           staff={displayStaff}
-          staffMembers={staffMembers}
           currentWallet={currentWallet}
-          setCurrentWallet={setCurrentWallet}
           isManager={isManager}
           network={data.store.network}
+          roleLabel={roleContext.label}
         />
-        <StatusBanner message={dbMessage} onReload={loadData} />
+        <StatusBanner message={dbMessage} onReload={reloadNetwork} />
         <div className="content-shell">
           {renderPage()}
         </div>
       </main>
 
-      {editingProduct && isManager && (
+      {editingProduct && canManageStore && (
         <ProductModal
           product={editingProduct}
           categories={data.categories}

@@ -1,6 +1,7 @@
 import { Bell, LogOut, Menu, Search, Wallet } from 'lucide-react';
 import { shortAddress } from '../utils/format.js';
 import { rolePermissionLabel } from '../utils/roles.js';
+import { paymentChains } from '../chains/index.js';
 
 export default function Header({
   query,
@@ -12,9 +13,11 @@ export default function Header({
   currentWallet,
   isManager,
   network,
+  roleLabel,
 }) {
   const displayWallet = currentWallet || staff?.wallet || '';
-  const staffName = staff?.name || (isManager ? 'Store Manager' : 'ArcPay Staff');
+  const staffName = staff?.name || (isManager ? 'Store Manager' : 'Paynet Staff');
+  const selectedNetwork = paymentChains.some(chain => chain.label === network) ? network : 'Avalanche Fuji';
 
   return (
     <header className="topbar">
@@ -35,23 +38,26 @@ export default function Header({
       <div className="topbar-spacer" />
 
       {!connected ? (
-        <button className="connect-wallet" type="button" onClick={onConnect}>
-          <Wallet size={17} /> Connect Wallet
-        </button>
+        <div className="connected-area">
+          <button className="connect-wallet" type="button" onClick={onConnect}>
+            <Wallet size={17} /> Connect Wallet
+          </button>
+        </div>
       ) : (
         <div className="connected-area">
-          <select className="network-select" value={network || 'Arc Testnet'} onChange={() => {}}>
-            <option>Arc Testnet</option>
-            <option>Arc Mainnet</option>
+          <select className="network-select" value={selectedNetwork} onChange={() => {}}>
+            {paymentChains.map(chain => (
+              <option key={chain.code}>{chain.label}</option>
+            ))}
           </select>
 
           <Bell className="bell-icon" size={21} />
 
           <div
             className="user-menu"
-            title={`${rolePermissionLabel(isManager)}\nWallet: ${displayWallet}`}
+            title={`${rolePermissionLabel(isManager, roleLabel)}\nWallet: ${displayWallet}`}
           >
-            <div className="mini-avatar">{staff?.avatar || '👤'}</div>
+            <div className="mini-avatar">{staff?.avatar || 'U'}</div>
             <div>
               <strong>{staffName}</strong>
               <span>{shortAddress(displayWallet)}</span>

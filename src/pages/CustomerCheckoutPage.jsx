@@ -1,16 +1,17 @@
 import { CheckCircle2, ExternalLink, QrCode, RefreshCw, Wallet } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { supabase, hasSupabaseConfig } from '../lib/supabaseClient.js';
-import { confirmArcPayment } from '../services/posService.js';
+import { confirmCheckoutPayment, loadCheckoutOrder } from '../services/paynetService.js';
 import {
-  recordPaymentProofOnArc,
-  arcRegistryTxUrl,
-  arcRegistryContractUrl,
-} from '../services/paymentRegistry.js';
-import { connectArcWallet, sendArcUsdcTransfer, waitForArcReceipt } from '../services/arcWallet.js';
-import { ARC_TESTNET, arcScanTxUrl } from '../utils/arcConfig.js';
+  connectAvalancheFujiWallet,
+  fujiTxUrl,
+  sendAvalancheFujiUsdcPayment,
+  waitForAvalancheFujiReceipt,
+  AVALANCHE_FUJI_CHAIN,
+  FUJI_USDC,
+} from '../services/avalanchePayment.js';
+import { recordApointPaymentProof } from '../services/apointProofService.js';
 import { money, pointsFromRaw, rawFromPoints, shortAddress } from '../utils/format.js';
-import { mapOrder } from '../utils/mappers.js';
 
 function getCheckoutToken() {
   const params = new URLSearchParams(window.location.search);
@@ -22,6 +23,23 @@ function getCheckoutToken() {
   const checkoutIndex = parts.findIndex(part => part === 'checkout');
 
   return checkoutIndex >= 0 ? parts[checkoutIndex + 1] : '';
+}
+
+const CHECKOUT_STORAGE_KEY = 'paynet.pendingCheckouts';
+
+function findStoredCheckout(token = '') {
+  if (!token || typeof window === 'undefined') return null;
+  try {
+    const rows = JSON.parse(window.localStorage.getItem(CHECKOUT_STORAGE_KEY) || '[]');
+    return rows.find(item =>
+      item.checkoutToken === token ||
+      item.checkout_token === token ||
+      item.code === token ||
+      item.id === token
+    ) || null;
+  } catch {
+    return null;
+  }
 }
 
 function getOrderStoreId(order = {}, store = {}) {
@@ -150,65 +168,63 @@ export default function CustomerCheckoutPage({
   const [availablePoints, setAvailablePoints] = useState(0);
 
   const [usePoints, setUsePoints] = useState(false);
+  const [redeemInput, setRedeemInput] = useState(0);
   const [status, setStatus] = useState('ready');
   const [txHash, setTxHash] = useState('');
   const [proofTxHash, setProofTxHash] = useState('');
-  const [proofStatus, setProofStatus] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
 
   useEffect(() => {
     async function loadCheckout() {
       setLoading(true);
       setErrorMessage('');
-      setProofStatus('');
-      setProofTxHash('');
 
       try {
+        let checkoutFound = false;
+
         if (hasSupabaseConfig && supabase && token) {
-          const { data, error } = await supabase
-            .from('orders')
-            .select('*, customers(full_name, wallet_address, point_balance), order_items(*, products(name, sku, barcode)), payments(*)')
-            .or(`checkout_token.eq.${token},code.eq.${token}`)
-            .limit(1)
-            .maybeSingle();
+          const mapped = await loadCheckoutOrder(token);
 
-          if (error) throw error;
-
-          if (data) {
-            const mapped = mapOrder(data);
-
-            setOrder({
-              ...mapped,
-              raw: data,
-              storeId: data.store_id,
-            });
-
+          if (mapped) {
+            setOrder(mapped);
             setCustomerWallet('');
             setWalletConnected(false);
             setWalletCustomer(null);
             setAvailablePoints(0);
             setUsePoints(false);
+            setRedeemInput(0);
 
             if (mapped.paymentStatus === 'paid' || mapped.status === 'paid') {
               setStatus('paid');
               setTxHash(mapped.txHash || '');
+              setProofTxHash(mapped.proofTxHash || '');
             } else {
               setStatus('ready');
               setTxHash('');
+              setProofTxHash('');
             }
+
+            checkoutFound = true;
           }
-        } else {
+        }
+
+        if (!checkoutFound) {
           const found = demoOrders.find(
             item =>
               item.checkoutToken === token ||
+              item.checkout_token === token ||
               item.code === token ||
               item.id === token
-          );
+          ) || findStoredCheckout(token);
 
           if (found) {
             setOrder(found);
             setAvailablePoints(0);
             setUsePoints(false);
+            setRedeemInput(0);
+            setStatus(found.paymentStatus === 'paid' || found.status === 'paid' ? 'paid' : 'ready');
+            setTxHash(found.txHash || '');
+            setProofTxHash(found.proofTxHash || '');
           }
         }
       } catch (error) {
@@ -226,7 +242,7 @@ export default function CustomerCheckoutPage({
     setErrorMessage('');
 
     try {
-      const wallet = await connectArcWallet();
+      const wallet = await connectAvalancheFujiWallet();
       const walletAddress = wallet.address;
 
       setCustomerWallet(walletAddress);
@@ -253,6 +269,7 @@ export default function CustomerCheckoutPage({
       setWalletCustomer(null);
       setAvailablePoints(0);
       setUsePoints(false);
+      setRedeemInput(0);
       setErrorMessage(error.message || 'Cannot connect wallet.');
     }
   }
@@ -276,6 +293,12 @@ export default function CustomerCheckoutPage({
   }
 
   const taxRate = Number(settings.taxRate || 10);
+  const checkoutStore = {
+    name: order?.storeName || store?.name || 'Store',
+    branch: order?.storeBranch || store?.branch || 'Checkout',
+  };
+  const checkoutReceiverWallet = order?.receiverWallet || receiverWallet;
+  const paymentTokenSymbol = FUJI_USDC.symbol;
 
   const subtotal = useMemo(() => {
     if (!order) return 0;
@@ -295,30 +318,60 @@ export default function CustomerCheckoutPage({
   const totalBeforePoints = subtotal + taxAmount;
 
   const maxDiscountRaw = Math.floor(totalBeforePoints * 0.2);
-  const redeemPoints = usePoints
-    ? Math.min(availablePoints, Math.floor(maxDiscountRaw / 100))
-    : 0;
+  const maxRedeemPoints = Math.min(availablePoints, Math.floor(maxDiscountRaw / 100));
+  const safeRedeemInput = Math.max(
+    0,
+    Math.min(maxRedeemPoints, Math.floor(Number(redeemInput) || 0))
+  );
+  const redeemPoints = usePoints ? safeRedeemInput : 0;
 
   const redeemedValue = rawFromPoints(redeemPoints);
   const payable = Math.max(totalBeforePoints - redeemedValue, 0);
   const earnedPoints = pointsFromRaw(payable);
 
-  async function payWithArc() {
+  useEffect(() => {
+    if (!usePoints) {
+      setRedeemInput(0);
+      return;
+    }
+
+    setRedeemInput(current => Math.max(
+      0,
+      Math.min(maxRedeemPoints, Math.floor(Number(current) || 0))
+    ));
+  }, [maxRedeemPoints, usePoints]);
+
+  function updateUsePoints(checked) {
+    setUsePoints(checked);
+    setRedeemInput(checked ? maxRedeemPoints : 0);
+  }
+
+  function updateRedeemPoints(value) {
+    const next = Math.max(
+      0,
+      Math.min(maxRedeemPoints, Math.floor(Number(value) || 0))
+    );
+
+    setRedeemInput(next);
+    setUsePoints(next > 0);
+  }
+
+  function updateRedeemPercent(percent) {
+    updateRedeemPoints(Math.floor(maxRedeemPoints * percent / 100));
+  }
+
+  async function payWithWallet() {
     if (!order) return;
 
     setErrorMessage('');
-    setProofStatus('');
+    setTxHash('');
     setProofTxHash('');
     setStatus('paying');
-
-    let submittedHash = '';
-    let receipt = null;
-    let proof = null;
 
     try {
       const wallet = walletConnected && customerWallet
         ? { address: customerWallet }
-        : await connectArcWallet();
+        : await connectAvalancheFujiWallet();
 
       const walletAddress = wallet.address;
 
@@ -338,88 +391,57 @@ export default function CustomerCheckoutPage({
         }
       }
 
-      submittedHash = await sendArcUsdcTransfer({
+      setStatus('confirming');
+
+      const paymentTxHash = await sendAvalancheFujiUsdcPayment({
         from: walletAddress,
-        to: receiverWallet,
+        to: checkoutReceiverWallet,
         rawAmount: payable,
       });
 
-      setTxHash(submittedHash);
-      setStatus('confirming');
+      setTxHash(paymentTxHash);
 
-      receipt = await waitForArcReceipt(submittedHash);
+      const paymentReceipt = await waitForAvalancheFujiReceipt(paymentTxHash);
 
-      if (String(receipt?.status || '').toLowerCase() === '0x0') {
-        throw new Error('Arc transaction reverted. The invoice was not marked as paid.');
+      if (String(paymentReceipt?.status || '').toLowerCase() === '0x0') {
+        throw new Error('USDC payment reverted. The invoice was not marked as paid.');
       }
 
-      try {
-        setProofStatus('Recording payment proof on ArcPayPaymentRegistry...');
+      const proof = await recordApointPaymentProof({
+        from: walletAddress,
+        invoiceId: order.code,
+        customerWallet: walletAddress,
+        storeWallet: checkoutReceiverWallet,
+        amount: payable,
+        points: earnedPoints,
+      });
 
-        proof = await recordPaymentProofOnArc({
-          invoiceCode: order.code,
-          checkoutToken: token || order.checkoutToken,
-          payer: walletAddress,
-          merchant: receiverWallet,
-          amount: payable,
-          paymentTxHash: submittedHash,
-          metadata: {
-            order_id: order.id,
-            currency: 'USDC',
-            subtotal_raw: subtotal,
-            tax_raw: taxAmount,
-            total_before_points_raw: totalBeforePoints,
-            redeemed_points: redeemPoints,
-            redeemed_value_raw: redeemedValue,
-            earned_points: earnedPoints,
-          },
-        });
-
-        if (proof?.proofTxHash) {
-          setProofTxHash(proof.proofTxHash);
-        }
-
-        setProofStatus(
-          proof?.alreadyRecorded
-            ? 'Payment proof already exists on ArcPayPaymentRegistry.'
-            : 'Payment proof recorded on ArcPayPaymentRegistry.'
-        );
-      } catch (proofError) {
-        console.error(proofError);
-        setProofStatus(
-          `USDC payment succeeded, but payment proof was not recorded: ${proofError.message || proofError}`
-        );
-      }
+      setProofTxHash(proof.txHash);
 
       if (hasSupabaseConfig && supabase && order.id && !String(order.id).startsWith('demo')) {
-        await confirmArcPayment({
+        await confirmCheckoutPayment({
           orderId: order.id,
           payerWallet: walletAddress,
-          checkoutToken: token || order.checkoutToken,
-          txHash: submittedHash,
+          txHash: paymentTxHash,
           rawResponse: {
-            mode: 'real-arc-usdc-erc20-transfer',
-            chain_id: ARC_TESTNET.chainIdDecimal,
-            network: 'arc-testnet',
-            receiver_wallet: receiverWallet,
+            mode: 'avalanche-fuji-usdc-payment-with-apoint-proof',
+            chain_id: AVALANCHE_FUJI_CHAIN.chainIdDecimal,
+            network: AVALANCHE_FUJI_CHAIN.code,
+            receiver_wallet: checkoutReceiverWallet,
             payable_raw: payable,
             redeemed_points: redeemPoints,
             redeemed_value_raw: redeemedValue,
             earned_points: earnedPoints,
-            tx_hash: submittedHash,
+            payment_token: FUJI_USDC.address,
+            payment_tx_hash: paymentTxHash,
+            payment_block_number: paymentReceipt?.blockNumber || '',
+            payment_explorer_url: fujiTxUrl(paymentTxHash),
+            proof_tx_hash: proof.txHash,
+            proof_block_number: proof.blockNumber || '',
+            proof_contract_address: proof.contractAddress,
+            proof_explorer_url: proof.explorerUrl,
             wallet_customer_id: customer?.id || null,
             wallet_address: walletAddress,
-
-            proof_contract: proof?.contractAddress || '',
-            proof_tx_hash: proof?.proofTxHash || '',
-            proof_already_recorded: Boolean(proof?.alreadyRecorded),
-            invoice_hash: proof?.invoiceHash || '',
-            checkout_token_hash: proof?.checkoutTokenHash || '',
-            proof_status: proof
-              ? 'recorded_or_exists'
-              : 'payment_success_proof_not_recorded',
-
-            receipt,
           },
         });
 
@@ -430,7 +452,7 @@ export default function CustomerCheckoutPage({
     } catch (error) {
       console.error(error);
       setStatus('ready');
-      setErrorMessage(error.message || 'Arc payment failed.');
+      setErrorMessage(error.message || 'Avalanche Fuji payment failed.');
     }
   }
 
@@ -450,7 +472,7 @@ export default function CustomerCheckoutPage({
         <section className="checkout-public-card center-card">
           <QrCode size={44} />
           <h1>Checkout not found</h1>
-          <p>Please ask the cashier to generate a new ArcPay checkout QR.</p>
+          <p>Please ask the cashier to generate a new checkout QR.</p>
           {errorMessage && <p className="error-text">{errorMessage}</p>}
         </section>
       </main>
@@ -463,9 +485,9 @@ export default function CustomerCheckoutPage({
         <div className="checkout-public-head">
           <div className="logo-mark">A</div>
           <div>
-            <p className="eyebrow">ArcPay Checkout</p>
-            <h1>{store?.name || 'Minh Chau Grocery'}</h1>
-            <span>{store?.branch || 'Da Nang Branch'} · {ARC_TESTNET.chainName}</span>
+            <p className="eyebrow">Paynet Checkout</p>
+            <h1>{checkoutStore.name}</h1>
+            <span>{checkoutStore.branch} · {paymentTokenSymbol} Payment</span>
           </div>
         </div>
 
@@ -551,10 +573,52 @@ export default function CustomerCheckoutPage({
                   status === 'confirming'
                 }
                 checked={usePoints}
-                onChange={event => setUsePoints(event.target.checked)}
+                onChange={event => updateUsePoints(event.target.checked)}
               />
               Use loyalty points before signing payment
             </label>
+
+            {usePoints && (
+              <div className="redeem-control">
+                <div className="redeem-control-head">
+                  <label>
+                    <span>APoint to redeem</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max={maxRedeemPoints}
+                      value={safeRedeemInput}
+                      onChange={event => updateRedeemPoints(event.target.value)}
+                    />
+                  </label>
+                  <strong>-{money(rawFromPoints(safeRedeemInput))}</strong>
+                </div>
+
+                <input
+                  className="redeem-slider"
+                  type="range"
+                  min="0"
+                  max={maxRedeemPoints}
+                  value={safeRedeemInput}
+                  onChange={event => updateRedeemPoints(event.target.value)}
+                />
+
+                <div className="redeem-quick-row">
+                  {[25, 50, 75, 100].map(percent => (
+                    <button
+                      key={percent}
+                      type="button"
+                      className={safeRedeemInput === Math.floor(maxRedeemPoints * percent / 100) ? 'active' : ''}
+                      onClick={() => updateRedeemPercent(percent)}
+                    >
+                      {percent}%
+                    </button>
+                  ))}
+                </div>
+
+                <small>Max redeem: {maxRedeemPoints} pts</small>
+              </div>
+            )}
 
             <p className="helper-text">
               Loyalty account: <strong>{walletCustomer?.full_name || shortAddress(customerWallet)}</strong>.
@@ -565,7 +629,7 @@ export default function CustomerCheckoutPage({
               className="success full public-pay-button"
               type="button"
               disabled={status === 'paying' || status === 'confirming' || status === 'paid'}
-              onClick={payWithArc}
+              onClick={payWithWallet}
             >
               {status === 'paying' || status === 'confirming'
                 ? <RefreshCw className="spin" size={16} />
@@ -573,54 +637,41 @@ export default function CustomerCheckoutPage({
               {status === 'paid'
                 ? 'Payment Confirmed'
                 : status === 'confirming'
-                  ? 'Waiting for Arc finality / proof...'
-                  : 'Pay with Arc USDC'}
+                  ? 'Waiting for payment confirmation...'
+                  : `Pay with ${paymentTokenSymbol}`}
             </button>
           </>
         )}
 
         {errorMessage && <p className="error-text">{errorMessage}</p>}
 
+        {status === 'paid' && (
+          <p className="payment-confirmation-note">
+            <CheckCircle2 size={16} /> Payment confirmed. Your receipt has been recorded.
+          </p>
+        )}
+
         {txHash && (
           <a
             className="explorer-link"
-            href={arcScanTxUrl(txHash)}
+            href={fujiTxUrl(txHash)}
             target="_blank"
             rel="noreferrer"
           >
-            View USDC payment transaction on ArcScan <ExternalLink size={14} />
+            View USDC payment transaction <ExternalLink size={14} />
           </a>
         )}
-
-        {proofStatus && <p className="helper-text">{proofStatus}</p>}
 
         {proofTxHash && (
           <a
             className="explorer-link"
-            href={arcRegistryTxUrl(proofTxHash)}
+            href={fujiTxUrl(proofTxHash)}
             target="_blank"
             rel="noreferrer"
           >
-            View payment proof transaction on ArcScan <ExternalLink size={14} />
+            View APoint proof transaction <ExternalLink size={14} />
           </a>
         )}
-
-        <a
-          className="explorer-link"
-          href={arcRegistryContractUrl()}
-          target="_blank"
-          rel="noreferrer"
-        >
-          View ArcPayPaymentRegistry contract <ExternalLink size={14} />
-        </a>
-
-        <div className="payment-info public-payment-info">
-          <p><span>Receiver</span><strong>{shortAddress(receiverWallet)}</strong></p>
-          <p><span>Network</span><strong>{ARC_TESTNET.chainName}</strong></p>
-          <p><span>USDC Contract</span><strong>{shortAddress('0x3600000000000000000000000000000000000000')}</strong></p>
-          <p><span>Registry Contract</span><strong>{shortAddress('0x7B9941Da31b2194Efc2881af3B35987EeF137AA6')}</strong></p>
-          <p><span>Checkout token</span><strong>{token || order.checkoutToken || '-'}</strong></p>
-        </div>
       </section>
     </main>
   );

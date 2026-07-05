@@ -61,7 +61,7 @@ export default function POSPanel({
     <section className="pos-panel panel">
       <div className="panel-head pos-head">
         <div>
-          <p className="eyebrow">Crypto Checkout</p>
+          <p className="eyebrow">USDC Checkout</p>
           <h2>POS / Checkout</h2>
         </div>
         <button
@@ -193,8 +193,8 @@ export default function POSPanel({
             <div className="payment-method-card">
               <Wallet size={18} />
               <div>
-                <strong>Arc Crypto Payment</strong>
-                <span>USDC checkout on Arc Testnet</span>
+                <strong>Wallet USDC Payment</strong>
+                <span>Customer pays with USDC from a wallet</span>
               </div>
             </div>
 
@@ -207,7 +207,7 @@ export default function POSPanel({
                 style={lockedButtonStyle}
               >
                 {paymentStatus === 'checking' ? <RefreshCw className="spin" size={16} /> : <QrCode size={16} />}
-                Generate Arc Checkout QR
+                Generate Checkout QR
               </button>
             ) : (
               <button
@@ -218,7 +218,7 @@ export default function POSPanel({
                 style={lockedButtonStyle}
               >
                 {paymentStatus === 'checking' ? <RefreshCw className="spin" size={16} /> : <CheckCircle2 size={16} />}
-                {paymentStatus === 'paid' ? 'Paid on Arc' : 'Manual Confirm Payment'}
+                {paymentStatus === 'paid' ? 'Paid' : 'Manual Confirm Payment'}
               </button>
             )}
 
@@ -244,7 +244,7 @@ export default function POSPanel({
                   {qrImageUrl ? (
                     <img
                       src={qrImageUrl}
-                      alt="ArcPay checkout QR"
+                      alt="Paynet checkout QR"
                       style={{
                         width: 240,
                         height: 240,
@@ -261,7 +261,7 @@ export default function POSPanel({
                 <small>Checkout page: {checkoutLink}</small>
 
                 <div className="payment-info">
-                  <p><span>Network</span><strong>Arc Testnet</strong></p>
+                  <p><span>Network</span><strong>Store payment network</strong></p>
                   <p><span>Receiver</span><strong>{shortAddress(receiverWallet)}</strong></p>
                   <p><span>Payable</span><strong>{money(total)}</strong></p>
                 </div>

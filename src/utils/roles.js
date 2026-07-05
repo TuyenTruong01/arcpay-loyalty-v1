@@ -1,31 +1,33 @@
-export const MANAGER_WALLET = '0x8e23Ca66E4E4d68c6C52Ed651d8487320B3d57d2';
+import { SYSTEM_ADMIN_WALLET, STORE_WALLETS } from './storeNetwork.js';
+
+export const MANAGER_WALLET = SYSTEM_ADMIN_WALLET;
 
 export const DEFAULT_STAFF_WALLETS = [
   {
-    id: 'manager-wallet',
-    name: 'Nguyen Van A',
-    role: 'Manager',
-    roleKey: 'manager',
-    wallet: MANAGER_WALLET,
-    avatar: '👨🏻‍💼',
+    id: 'system-admin-wallet',
+    name: 'System Admin',
+    role: 'System Admin',
+    roleKey: 'system_admin',
+    wallet: SYSTEM_ADMIN_WALLET,
+    avatar: 'SA',
     active: true,
   },
   {
-    id: 'staff-wallet-1',
-    name: 'Staff 01',
-    role: 'Cashier',
-    roleKey: 'cashier',
-    wallet: '0x5C73D6297A7447D3412a1B1f9b5B3d9746DfBD81',
-    avatar: '👩🏻‍💼',
+    id: 'grocery-owner-wallet',
+    name: 'Grocery Owner',
+    role: 'Owner',
+    roleKey: 'owner',
+    wallet: STORE_WALLETS.grocery.owner,
+    avatar: 'GO',
     active: true,
   },
   {
-    id: 'staff-wallet-2',
-    name: 'Staff 02',
+    id: 'grocery-staff-wallet',
+    name: 'Grocery Cashier',
     role: 'Cashier',
     roleKey: 'cashier',
-    wallet: '0x89dbe1ae9542250CAaAe6449AE9F2A0C45Ef5B18',
-    avatar: '👨🏻‍💻',
+    wallet: STORE_WALLETS.grocery.staff,
+    avatar: 'GC',
     active: true,
   },
 ];
@@ -35,11 +37,7 @@ export function normalizeWallet(wallet = '') {
 }
 
 export function ensureStaffArray(staffMembers) {
-  if (Array.isArray(staffMembers)) {
-    return staffMembers;
-  }
-
-  return DEFAULT_STAFF_WALLETS;
+  return Array.isArray(staffMembers) ? staffMembers : DEFAULT_STAFF_WALLETS;
 }
 
 export function findWhitelistedStaffByWallet(staffMembers = DEFAULT_STAFF_WALLETS, wallet = '') {
@@ -77,9 +75,10 @@ export function isManagerWallet(wallet = '', staff = null) {
 
   const role = String(staff?.role || staff?.roleKey || '').toLowerCase();
 
-  return role === 'manager' || role === 'owner';
+  return ['manager', 'owner', 'store_owner', 'system_admin'].includes(role);
 }
 
-export function rolePermissionLabel(isManager) {
+export function rolePermissionLabel(isManager, roleLabel = '') {
+  if (roleLabel) return roleLabel;
   return isManager ? 'Manager: full edit access' : 'Staff: POS access only';
 }

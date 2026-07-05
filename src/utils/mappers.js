@@ -5,7 +5,7 @@ export function mapStore(row) {
     id: row?.id || null,
     name: row?.name ? row.name.replace('Tạp hóa Minh Châu', 'Minh Chau Grocery') : 'Minh Chau Grocery',
     branch: row?.branch_name ? row.branch_name.replace('Chi nhánh Đà Nẵng', 'Da Nang Branch') : 'Da Nang Branch',
-    network: 'Arc Testnet',
+    network: row?.network || 'Store payment network',
   };
 }
 
@@ -51,7 +51,7 @@ export function mapProduct(row, categoryMap = {}) {
 export function mapCustomer(row) {
   return {
     id: row.id,
-    name: row.full_name || 'Arc Wallet Customer',
+    name: row.full_name || 'Wallet Customer',
     wallet: row.wallet_address || '',
     points: Number(row.point_balance || 0),
     totalSpent: Number(row.total_spent || 0),
@@ -89,10 +89,10 @@ export function mapOrder(row) {
     total: Number(row.total_amount || 0),
     status: row.status || 'draft',
     paymentStatus: row.payment_status || 'unpaid',
-    paymentMethod: row.payment_method || 'arc',
+    paymentMethod: row.payment_method || latestPayment?.payment_networks?.code || 'wallet',
     checkoutToken: row.checkout_token || '',
     txHash: latestPayment?.tx_hash || '',
-    network: latestPayment?.network || 'arc-testnet',
+    network: latestPayment?.payment_networks?.code || latestPayment?.network || 'Store payment network',
     paidAt: row.paid_at || latestPayment?.paid_at,
     createdAt: row.created_at,
     items: Array.isArray(row.order_items) ? row.order_items.map(mapOrderItem) : [],

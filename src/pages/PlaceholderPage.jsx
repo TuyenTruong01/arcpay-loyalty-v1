@@ -7,7 +7,7 @@ export default function PlaceholderPage({ title, description }) {
       <div className="placeholder-grid">
         <div><strong>Demo Ready</strong><span>UI shell is prepared for hackathon walkthrough.</span></div>
         <div><strong>Supabase Backed</strong><span>Can be connected to the existing tables next.</span></div>
-        <div><strong>Arc First</strong><span>Crypto payment stays as the central flow.</span></div>
+        <div><strong>Multi-chain Ready</strong><span>Wallet payment stays as the central flow.</span></div>
       </div>
     </section>
   );

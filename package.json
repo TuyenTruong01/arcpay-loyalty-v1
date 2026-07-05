@@ -1,24 +1,27 @@
 {
   "name": "arcpay-loyalty-supabase-connected",
   "version": "1.0.0",
-  "description": "ArcPay Loyalty POS connected to Supabase with Arc mock payment flow",
+  "description": "Paynet APoint POS connected to Supabase with JSON role access",
   "scripts": {
     "dev": "node ./node_modules/vite/bin/vite.js --host 0.0.0.0",
     "build": "node ./node_modules/vite/bin/vite.js build",
-    "preview": "node ./node_modules/vite/bin/vite.js preview --host 0.0.0.0"
+    "preview": "node ./node_modules/vite/bin/vite.js preview --host 0.0.0.0",
+    "compile:contracts": "hardhat compile",
+    "deploy:fuji": "hardhat run scripts/deployApointPaymentProof.js --network fuji",
+    "test:proof:fuji": "hardhat run scripts/testRecordPaymentProof.js --network fuji"
   },
   "dependencies": {
     "@supabase/supabase-js": "latest",
     "@vitejs/plugin-react": "latest",
+    "@walletconnect/ethereum-provider": "^2.17.2",
     "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",
     "vite": "latest"
   },
   "devDependencies": {
-    "@nomicfoundation/hardhat-ethers": "^3.1.3",
-    "dotenv": "^17.4.2",
-    "ethers": "^6.14.0",
-    "hardhat": "^2.26.3"
+    "@nomicfoundation/hardhat-ethers": "^3.1.2",
+    "dotenv": "^16.4.7",
+    "hardhat": "^2.22.19"
   }
 }

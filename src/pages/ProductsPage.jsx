@@ -1,7 +1,24 @@
 import { Edit3, Plus } from 'lucide-react';
 import { money, shortAddress } from '../utils/format.js';
 
-export default function ProductsPage({ products, setEditingProduct, canManage = false }) {
+const productStatuses = [
+  { value: 'active', label: 'Active' },
+  { value: 'inactive', label: 'Inactive' },
+  { value: 'discontinued', label: 'No longer produced' },
+];
+
+function statusBadge(status = 'active') {
+  if (status === 'active') return 'ok';
+  if (status === 'inactive') return 'warn';
+  return 'bad';
+}
+
+export default function ProductsPage({
+  products,
+  setEditingProduct,
+  canManage = false,
+  onUpdateProductStatus,
+}) {
   return (
     <section className="panel full-page-panel">
       <div className="panel-head">
@@ -25,25 +42,40 @@ export default function ProductsPage({ products, setEditingProduct, canManage = 
           </tr>
         </thead>
         <tbody>
-          {products.map((product, index) => (
-            <tr key={product.id}>
-              <td>{index + 1}</td>
-              <td>
-                <div className="table-image">
-                  {product.image ? <img src={product.image} alt="" /> : <span>{product.emoji}</span>}
-                </div>
-              </td>
-              <td><strong>{product.name}</strong></td>
-              <td>{product.sku}</td>
-              <td><code>{product.barcode ? shortAddress(product.barcode) : '-'}</code></td>
-              <td>{product.category}</td>
-              <td>{product.unit || 'unit'}</td>
-              <td>{money(product.price)}</td>
-              <td className="muted-cell">{product.description || '—'}</td>
-              <td><span className={`badge ${product.active === false ? 'bad' : 'ok'}`}>{product.active === false ? 'Inactive' : 'Active'}</span></td>
-              <td>{canManage ? <button type="button" className="small-action" onClick={() => setEditingProduct(product)}><Edit3 size={14} /> Edit</button> : <span className="muted-cell">View only</span>}</td>
-            </tr>
-          ))}
+          {products.map((product, index) => {
+            const status = product.status || (product.active === false ? 'inactive' : 'active');
+            return (
+              <tr key={product.id}>
+                <td>{index + 1}</td>
+                <td>
+                  <div className="table-image">
+                    {product.image ? <img src={product.image} alt="" /> : <span>{product.emoji}</span>}
+                  </div>
+                </td>
+                <td><strong>{product.name}</strong></td>
+                <td>{product.sku}</td>
+                <td><code>{product.barcode ? shortAddress(product.barcode) : '-'}</code></td>
+                <td>{product.category}</td>
+                <td>{product.unit || 'unit'}</td>
+                <td>{money(product.price)}</td>
+                <td className="muted-cell">{product.description || '-'}</td>
+                <td>
+                  {canManage ? (
+                    <select
+                      className={`status-select ${statusBadge(status)}`}
+                      value={status}
+                      onChange={event => onUpdateProductStatus?.(product.id, event.target.value)}
+                    >
+                      {productStatuses.map(option => <option value={option.value} key={option.value}>{option.label}</option>)}
+                    </select>
+                  ) : (
+                    <span className={`badge ${statusBadge(status)}`}>{productStatuses.find(item => item.value === status)?.label || status}</span>
+                  )}
+                </td>
+                <td>{canManage ? <button type="button" className="small-action" onClick={() => setEditingProduct(product)}><Edit3 size={14} /> Edit</button> : <span className="muted-cell">View only</span>}</td>
+              </tr>
+            );
+          })}
           {!products.length && <tr><td colSpan="11" className="empty-row">No products found.</td></tr>}
         </tbody>
       </table>

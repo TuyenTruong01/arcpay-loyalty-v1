@@ -1,19 +1,24 @@
-require("@nomicfoundation/hardhat-ethers");
-require("dotenv").config();
+require('@nomicfoundation/hardhat-ethers');
+require('dotenv').config();
 
-let privateKey = process.env.DEPLOYER_PRIVATE_KEY || "";
-
-if (privateKey && !privateKey.startsWith("0x")) {
-  privateKey = `0x${privateKey}`;
-}
+const FUJI_RPC_URL = process.env.FUJI_RPC_URL || 'https://api.avax-test.network/ext/bc/C/rpc';
+const DEPLOYER_PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY || '';
 
 module.exports = {
-  solidity: "0.8.24",
+  solidity: {
+    version: '0.8.24',
+    settings: {
+      optimizer: {
+        enabled: true,
+        runs: 200,
+      },
+    },
+  },
   networks: {
-    arcTestnet: {
-      url: "https://rpc.testnet.arc.network",
-      chainId: 5042002,
-      accounts: privateKey ? [privateKey] : [],
+    fuji: {
+      url: FUJI_RPC_URL,
+      chainId: 43113,
+      accounts: DEPLOYER_PRIVATE_KEY ? [DEPLOYER_PRIVATE_KEY] : [],
     },
   },
 };
